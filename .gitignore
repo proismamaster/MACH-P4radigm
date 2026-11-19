@@ -1,0 +1,7 @@
+.city/
+*.vk
+__pycache__/
+*.pyc
+.venv/
+.env
+.config/
