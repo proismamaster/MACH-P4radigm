@@ -137,15 +137,9 @@ async def handle(role: str, city: City, message: Message, chat: list[Message]) -
     if street and _asks_address(message):
         await city.say(message.sender, f"address={street}")
         return
-    if role == "gp":
-        await _gp(city, message, chat)
-    elif role == "booking_centre":
-        await _desk(city, message, chat, hold_self=False, fixed=None)
-    elif role == "hospital":
-        await _facility(city, message, chat, reports=False, hold_self=False)
-    elif role == "specialist_care":
-        await _facility(city, message, chat, reports=True, hold_self=False)
-    elif role == "family_counseling":
+    # This file serves only its own role: the other roles' code was removed to keep the
+    # brain small for the city's deploy scan (see team/DECISIONS.md).
+    if role == "family_counseling":
         await _family(city, message, chat)
 
 
@@ -322,15 +316,6 @@ def _has_procedure(chat: list[Message]) -> bool:
     return reply is not None and bool(reply.get("procedure"))
 
 
-def _rx(need_id: str | None, msg_id: str) -> str:
-    raw = (need_id or msg_id or "CASE").upper()
-    suffix = "".join(ch if ch.isalnum() or ch == "-" else "-" for ch in raw).strip("-")
-    if len(suffix) < 4:
-        suffix = (suffix + "0000")[:4]
-    number = "prescription_number-" + suffix[:40]
-    return number if _RX.fullmatch(number) else "prescription_number-CASE"
-
-
 def _speaks(doctor_id: str, lang: str) -> bool:
     spec = _DOCTORS.get(doctor_id.rsplit("-", 1)[-1])
     if spec is None:
@@ -397,94 +382,6 @@ def fitting(
 
 
 # --- medico di base ----------------------------------------------------------------------------
-
-
-def _emergency(message: Message) -> bool:
-    if understood(message).body.get("is_emergency") is True:
-        return True
-    lowered = message.text.lower()
-    return any(flag in lowered for flag in _RED_FLAGS)
-
-
-def _symptom(message: Message) -> str | None:
-    code = understood(message).body.get("symptom_code")
-    if isinstance(code, str) and code in _PROTOCOLS:
-        return code
-    lowered = message.text.lower()
-    for name, phrases in _KEYWORDS:
-        if any(phrase in lowered for phrase in phrases):
-            return name
-    return None
-
-
-def _our_rx(chat: list[Message], agent: str) -> dict[str, str]:
-    found: dict[str, str] = {}
-    for row in chat:
-        if row.sender == agent and "prescribe" in words(row.text):
-            found = fields_of(row.text)
-    return found
-
-
-async def _gp(city: City, message: Message, chat: list[Message]) -> None:
-    agent = city.agent_id
-    if message.sender == LEDGER:
-        await _announce(city, message, chat, agent)
-        return
-    if not message.sender.startswith("citizen:"):
-        return
-    if _emergency(message):
-        if not _we(chat, agent, "escalate.emergency", to=message.sender, word="escalate.emergency"):
-            await _say(city, message.sender, "escalate.emergency reason=red_flag")
-        return
-    code = _symptom(message)
-    if code is None:
-        return
-    procedure, priority = _PROTOCOLS[code]
-    number = _rx(message.need_id, message.msg_id)
-    token = f"prescription_number={number}"
-    # The citizen's reply window closes before a ledger round trip comes back, so the
-    # prescription is said in this same turn. The ledger write is what the judge reads.
-    if not _we(chat, agent, token, to=LEDGER, word="prescribe"):
-        if not await _say(
-            city,
-            LEDGER,
-            (
-                f"prescribe patient={message.sender} procedure={procedure} priority={priority} "
-                f"symptom_code={code} {token}"
-            ),
-        ):
-            return
-    if _we(chat, agent, token, to=message.sender, word="prescription"):
-        return
-    await _say(
-        city,
-        message.sender,
-        f"prescription {token} procedure={procedure} priority={priority}",
-    )
-
-
-async def _announce(city: City, message: Message, chat: list[Message], agent: str) -> None:
-    head = first_word(message.text)
-    if head == "refused" and "DUPLICATE" not in message.text:
-        return
-    if head not in {"prescribed", "refused"}:
-        return
-    fields = fields_of(message.text)
-    ours = _our_rx(chat, agent)
-    number = fields.get("prescription_number") or ours.get("prescription_number")
-    citizen = fields.get("patient") or _citizen(chat)
-    if not number or not citizen:
-        return
-    if _we(chat, agent, f"prescription_number={number}", to=citizen, word="prescription"):
-        return
-    parts = ["prescription", f"prescription_number={number}"]
-    procedure = fields.get("procedure") or ours.get("procedure")
-    priority = fields.get("priority") or ours.get("priority")
-    if procedure:
-        parts.append(f"procedure={procedure}")
-    if priority:
-        parts.append(f"priority={priority}")
-    await _say(city, citizen, " ".join(parts))
 
 
 # --- centro prenotazioni and consultorio -------------------------------------------------------
