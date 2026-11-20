@@ -1,5 +1,18 @@
 # Journal (la voce più recente in alto)
 
+## 2026-11-20 22:36 — Ismail — Specialist online, file ridotti
+
+**Fatto**
+- Specialist 1.0.2 online alle 22:34 (consenso `report_sharing`, referto unico, `ledger_ref`), dopo 3 fallimenti con il file da 1219 righe. Ridotto a 667 righe su consiglio del mentor.
+- GP e CUP ridotti con lo stesso metodo; confronto completo/ridotto identico (CUP 8 scenari, GP 6, specialist 6). PR #10 unita.
+- Deploy del CUP (cross-ASST + id medico) partito alle 22:35.
+
+**Problemi**
+- Hospital e consultorio hanno ancora il file completo (1563 righe): da ridurre prima del prossimo deploy (Alberto o Ismail).
+
+**Prossimo passo**
+- CUP online prima del livello 4, poi GP 1.0.3 (messaggi cortesi, red flag del world, file ridotto).
+
 ## 2026-11-20 22:12 — Ismail — GP online, PR #7 e #8 unite
 
 **Fatto**

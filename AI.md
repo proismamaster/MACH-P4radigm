@@ -77,6 +77,8 @@ booking_centre `agent:ez8cb7j167p2` · gp `agent:rng5wcrzvhsj` · hospital `agen
 
 ## Errori già trovati (non ripeterli)
 
+0. **File troppo grandi = deploy che fallisce.** Ogni `agent.py` contiene solo il codice del suo ruolo (vedi `team/DECISIONS.md`). Non copiare l'esempio completo da 1155 righe in un agente.
+
 1. **I cittadini scrivono in testo libero** ("ho mal di schiena", "il cuore che batte a mille"), non `symptom_code=`. Un agente che accetta solo campi strutturati blocca tutto il percorso. Serve sempre un fallback a parole chiave.
 2. **Il cittadino risponde a una domanda generica con un `consent`.** Non chiedere "mi descriva meglio" se puoi capire dal testo: il percorso si ferma.
 3. **La risposta del Ledger può arrivare in un'altra conversazione** dello stesso caso: filtra per `need_id`, non per `conversation_id`.
