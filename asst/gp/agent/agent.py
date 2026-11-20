@@ -612,7 +612,8 @@ async def _gp(city: City, message: Message, chat: list[Message], *, urgent: bool
         return
     # Scan the whole citizen history: the keyword fallback reads it too, so a red flag in an
     # older message must escalate before any prescription.
-    if urgent or any(row.sender == citizen and _emergency(row) for row in chat):
+    if (urgent or any(row.sender == citizen and _emergency(row) for row in chat)
+            or _gp_world_emergency(chat, citizen)):
         await _gp_send(city, message, citizen, "escalate.emergency reason=red_flag")
         return
 
