@@ -72,6 +72,9 @@ booking_centre `agent:ez8cb7j167p2` · gp `agent:rng5wcrzvhsj` · hospital `agen
 - Un agente alla volta. Prima: `city card validate <agente>`, test verdi, annuncio nel gruppo ("DEPLOY gp tra 5 min").
 - Su Windows prima di ogni comando `city`: `$env:PYTHONIOENCODING="utf-8"` (senza, la CLI si rompe sul carattere ✓).
 - Comando: `city deploy <agente>` dalla cartella `asst/`. Deve chiudere con `released`.
+- **Un deploy per squadra ogni 5 minuti** (`QUOTA_EXCEEDED`): anche un tentativo rifiutato fa ripartire l'attesa. Su PowerShell: `Start-Sleep -Seconds 300; city deploy <agente>`.
+- Dopo `released` la CLI porta `version` della card alla patch successiva **solo sul tuo PC**: committa subito `asst/<agente>/card.yaml`, altrimenti il prossimo deploy riusa una versione vecchia.
+- `failed` con "ingress route did not become ready": è la città. Controlla `city --json status <agente>` (a volte la versione nuova arriva lo stesso), poi riprova; se si ripete, il file è troppo grande (vedi errore 0).
 - Se peggiora: `city rollback agent:<nome> --to <versione>`. **Mai `city retire`, mai `city delete`.**
 - Dopo il deploy: guarda la console (Percorsi dei cittadini) per 5 minuti.
 
