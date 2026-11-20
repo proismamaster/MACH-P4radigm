@@ -1,0 +1,4 @@
+agent: booking_centre
+# Per le prove locali. Impostare la squadra assegnata prima del rilascio.
+team: local-dev
+role: booking_centre

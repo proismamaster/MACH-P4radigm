@@ -1,0 +1,15 @@
+agent_id: agent:kns1ve6wnncw
+# Per le prove locali. Impostare la squadra assegnata prima del rilascio.
+team: team:local-dev
+name: hospital
+version: 1.0.0
+cap_versions:
+  - "1.0"
+profiles:
+  - mhm/1.0
+role: facility
+capabilities:
+  - hospital.physiatry
+no_clinical_advice: true
+endpoints:
+  mailbox: agent:kns1ve6wnncw

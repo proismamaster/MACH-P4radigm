@@ -1,0 +1,15 @@
+agent_id: agent:gsneva6tkmw5
+# Per le prove locali. Impostare la squadra assegnata prima del rilascio.
+team: team:local-dev
+name: specialist
+version: 1.0.0
+cap_versions:
+  - "1.0"
+profiles:
+  - mhm/1.0
+role: facility
+capabilities:
+  - specialist_care.cardiology
+no_clinical_advice: true
+endpoints:
+  mailbox: agent:gsneva6tkmw5
