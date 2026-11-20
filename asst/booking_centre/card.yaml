@@ -1,7 +1,7 @@
-agent_id: agent:gyj95bfpdv28
+agent_id: agent:ez8cb7j167p2
 team: team:p4radigm
 name: booking_centre
-version: 1.0.0
+version: 1.0.1
 cap_versions:
   - "1.0"
 profiles:
@@ -11,4 +11,4 @@ capabilities:
   - booking_centre
 no_clinical_advice: true
 endpoints:
-  mailbox: agent:gyj95bfpdv28
+  mailbox: agent:ez8cb7j167p2

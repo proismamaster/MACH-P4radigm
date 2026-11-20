@@ -1,7 +1,7 @@
-agent_id: agent:drwg5hchnrze
+agent_id: agent:rng5wcrzvhsj
 team: team:p4radigm
 name: gp
-version: 1.0.0
+version: 1.0.1
 cap_versions:
   - "1.0"
 profiles:
@@ -11,4 +11,4 @@ capabilities:
   - gp
 no_clinical_advice: true
 endpoints:
-  mailbox: agent:drwg5hchnrze
+  mailbox: agent:rng5wcrzvhsj
