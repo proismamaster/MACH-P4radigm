@@ -75,6 +75,30 @@ _CUP_SERVICES = {
 }
 _CUP_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}")
 _CUP_MAX_PARTNERS = 12
+# Level 4: facilities other teams published on the event Discord (21/11, 00:00-00:40), with the
+# rare language of their h3. city.find alone did not bring partner offers (journeys 153, 165, 166:
+# answer set not empty, no partner slot). Only search criteria travel before the cross_asst consent.
+_CUP_RING = (
+    # (h3 language, hospital.physiatry, specialist_care.cardiology)
+    ("ka", "agent:h6r1v45esk77", "agent:hnpe58epeyh1"),  # Giambellino
+    ("ur", "agent:gpr1zqe343gb", "agent:zand0f57ec1j"),  # Nord
+    ("ja", "agent:nanpr5mgm2py", "agent:pky3vqyqbepa"),  # Lambrate
+    ("si", "agent:xtj1dk9x3qej", "agent:q18es2d82f8r"),  # Greco
+    ("fr", "agent:x0vr9rbwpesr", "agent:h8425ac7btd8"),  # Corvetto
+    ("", "agent:tmt0bcv0st1f", "agent:n9bf9y6670hp"),    # Lorenteggio
+)
+_CUP_RING_COLUMN = {"hospital.physiatry": 1, "specialist_care.cardiology": 2}
+
+
+def _cup_partner_candidates(found: list[str], service: str, local: set[str], language: str) -> list[str]:
+    """Known ring facilities first (the one whose h3 speaks the citizen's language at the top),
+    then whatever city.find returned; never our own facilities."""
+    column = _CUP_RING_COLUMN.get(service)
+    ring = [] if column is None else sorted(_CUP_RING, key=lambda row: row[0] != language)
+    known = [row[column] for row in ring]
+    ordered = dict.fromkeys([*known, *found])
+    return [agent for agent in ordered if agent not in local and _CUP_TOKEN.fullmatch(agent)][:_CUP_MAX_PARTNERS]
+
 _CUP_PARTNER_REPLY_SECONDS = 8
 
 
@@ -1046,15 +1070,13 @@ async def _cup_cross_asst(
         try:
             peers = await city.find(service)
         except CapError:
-            return
+            peers = []
         local = _cup_local_facilities(chat) | {city.agent_id}
-        candidates = dict.fromkeys(
+        found = [
             peer.agent_id for peer in peers
-            if peer.role == "facility" and service in peer.capabilities
-            and peer.agent_id.startswith("agent:") and _CUP_TOKEN.fullmatch(peer.agent_id)
-            and peer.agent_id not in local
-        )
-        for partner in list(candidates)[:_CUP_MAX_PARTNERS]:
+            if peer.role == "facility" and service in peer.capabilities and peer.agent_id.startswith("agent:")
+        ]
+        for partner in _cup_partner_candidates(found, service, local, _lang(chat)):
             request_id = f"rq-{token_hex(8)}"
             search = f"need.request service_type={service} procedure={procedure} priority={priority} request_id={request_id}"
             if (language := _lang(chat)) not in {"it", ""}:
