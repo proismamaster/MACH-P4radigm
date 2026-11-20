@@ -74,7 +74,7 @@ _CUP_SERVICES = {
     "CTRL-CARD": "specialist_care.cardiology",
 }
 _CUP_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}")
-_CUP_MAX_PARTNERS = 3
+_CUP_MAX_PARTNERS = 12
 _CUP_PARTNER_REPLY_SECONDS = 8
 
 
@@ -828,7 +828,9 @@ async def _cup_confirm(
     )
     if partner_id:
         confirmation += (
-            f" cross_consent_ref={cross_ref} request_id={offer['request_id']} cup_offer_id={offer_id}"
+            # cross_asst_consent_ref is the name in the level-4 common format agreed between teams.
+            f" cross_consent_ref={cross_ref} cross_asst_consent_ref={cross_ref}"
+            f" request_id={offer['request_id']} cup_offer_id={offer_id}"
         )
     # If the send has no definite outcome, wait for history rather than sending a second confirm.
     cache.uncertain_confirmation = True
@@ -985,7 +987,7 @@ def _cup_partner_slots(
             offer_id, slot_id, doctor = (fields.get(key, "") for key in ("offer_id", "slot_id", "doctor_id"))
             if not all(_CUP_TOKEN.fullmatch(token) for token in (offer_id, slot_id, doctor)):
                 continue
-            if slot_id in taken or fields.get("facility") != row.sender or fields.get("procedure") != procedure:
+            if slot_id in taken or fields.get("facility", row.sender) != row.sender or fields.get("procedure") != procedure:
                 continue
             if fields.get("priority", priority) != priority:
                 continue
@@ -995,24 +997,39 @@ def _cup_partner_slots(
             if fields.get("urgent_reserve", "").lower() == "true" and priority != "U":
                 continue
             at = _when(fields.get("agenda_date", ""))
-            expiry = _when(fields.get("expiry", ""))
+            # The level-4 common format (agreed between teams) omits expiry and agenda_day:
+            # the slot then expires at its own time and the day comes from the date.
+            raw_expiry = fields.get("expiry", "")
+            expiry = _when(raw_expiry) if raw_expiry else at  # present but unreadable: discarded below
             if at is None or expiry is None or expiry <= now or not earliest < at < horizon:
                 continue
-            day = fields.get("agenda_day", "")
+            day = fields.get("agenda_day") or _AGENDA_WEEKDAYS[at.weekday()]
             if day not in _AGENDA_DAYS or day != _AGENDA_WEEKDAYS[at.weekday()] or (days and day not in days):
                 continue
             # The common doctor template has stable Italian/English and gender entries.
-            # A rare language belongs to a specific ASST, so a wildcard is not evidence here.
+            # A rare language belongs to a specific ASST, so a wildcard is not evidence here:
+            # only the partner's own doctor_lang / doctor_gender can prove it.
+            # The table stays authoritative for gender, days and every language it names; the
+            # partner's doctor_lang only fills the table's "*" (or an unknown doctor).
             spec = _doctor_spec(doctor)
-            if spec is None:
-                if not _unknown_doctor_ok(language, gender):
+            stated = set(re.split(r"[/,+]", fields.get("doctor_lang", ""))) - {"", "*"}
+            stated_sex = fields.get("doctor_gender")
+            if stated_sex not in {None, "m", "f"}:
+                continue
+            if spec is not None:
+                if (gender and gender != spec[1]) or day not in spec[2]:
                     continue
-            elif language not in spec[0] or (gender and gender != spec[1]) or day not in spec[2]:
+                if language not in spec[0] and not ("*" in spec[0] and language in stated):
+                    continue
+            elif stated:
+                if language not in stated or (gender and gender != stated_sex):
+                    continue
+            elif not _unknown_doctor_ok(language, gender):
                 continue
             slots[row.sender, slot_id] = {
                 "slot_id": slot_id, "doctor_id": doctor, "facility": row.sender,
                 "procedure": procedure, "at": fields["agenda_date"], "day": day,
-                "expiry": fields["expiry"], "partner_offer_id": offer_id, "request_id": request_id,
+                "expiry": fields.get("expiry") or fields["agenda_date"], "partner_offer_id": offer_id, "request_id": request_id,
             }
     return sorted(slots.values(), key=lambda slot: (_when(slot["at"]), slot["slot_id"])), answered
 
@@ -1040,6 +1057,10 @@ async def _cup_cross_asst(
         for partner in list(candidates)[:_CUP_MAX_PARTNERS]:
             request_id = f"rq-{token_hex(8)}"
             search = f"need.request service_type={service} procedure={procedure} priority={priority} request_id={request_id}"
+            if (language := _lang(chat)) not in {"it", ""}:
+                search += f" lang={language}"
+            if gender := _gender(chat):
+                search += f" gender_preference={gender}"
             if await _cup_send(city, message, cache, partner, search):
                 searches[partner] = request_id
     elif cache.partner_search_started is None:
