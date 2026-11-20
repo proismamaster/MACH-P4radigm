@@ -1037,7 +1037,7 @@ def _cup_partner_slots(
 async def _cup_cross_asst(
     city: City, message: Message, chat: list[Message], cache: _Sent, citizen: str,
     procedure: str, priority: str, now: datetime, number: str, taken: set[str],
-    *, replacing: bool,
+    *, replacing: bool, relaxed: list[dict[str, str]] | None = None,
 ) -> None:
     service = _CUP_SERVICES[procedure]
     searches = _cup_searches(chat, city.agent_id)
@@ -1083,6 +1083,13 @@ async def _cup_cross_asst(
     pending = searches.keys() - answered
     if pending and monotonic() - cache.partner_search_started < _CUP_PARTNER_REPLY_SECONDS:
         return
+    if relaxed and not _we(chat, city.agent_id, "relaxed=true", to=citizen, word="offer"):
+        await _cup_offer_batch(
+            city, message, cache, citizen, relaxed, number, priority, replacing=replacing,
+            note="Non ci sono orari che rispettano tutte le sue richieste nei tempi previsti. "
+                 "Le propongo l'alternativa più vicina.",
+        )
+        return
     reason = "partner_unavailable" if pending else "no_slots"
     if not _we(chat, city.agent_id, f"reason={reason}", to=citizen, word="cancel"):
         await _cup_send(
@@ -1091,16 +1098,31 @@ async def _cup_cross_asst(
         )
 
 
+def _cup_relaxed(
+    lines: list[str], *, now: datetime, lang: str, gender: str | None, procedure: str,
+) -> list[dict[str, str]]:
+    """Empty answer set: the nearest slots with one constraint relaxed (rules: offer a relaxed
+    alternative, do not book outside S on our own). First the time window (same language and
+    gender, any later day), then the language (an Italian-speaking doctor)."""
+    relaxed = fitting(lines, now=now, priority="P", lang=lang, gender=gender, procedure=procedure)
+    if not relaxed and (lang not in {"it", ""} or gender):
+        relaxed = fitting(lines, now=now, priority="P", lang="it", procedure=procedure)
+    return relaxed
+
+
 async def _cup_offer_batch(
     city: City, message: Message, cache: _Sent, citizen: str,
     slots: list[dict[str, str]], number: str | None, priority: str | None, *, replacing: bool,
+    note: str | None = None,
 ) -> None:
     batch = token_hex(6)
-    instruction = "Scegli uno degli orari."
+    instruction = f"{note} Scegli uno degli orari, se le va bene." if note else "Scegli uno degli orari."
     options = []
     delivered = set()
     for index, slot in enumerate(slots[:3], 1):
         line = _offer_line(slot, number, priority, offer_id=f"of-{batch}-{index}")
+        if note:
+            line += " relaxed=true"
         if "partner_offer_id" in slot:
             line += f" partner_offer_id={slot['partner_offer_id']} request_id={slot['request_id']} Rete ASST."
         if at := _when(slot["at"]):
@@ -1251,8 +1273,18 @@ async def _advance_alone(
             await _cup_send(city, message, sent, LEDGER, f"world procedure={procedure} page={page + 1}")
         return
     if number and procedure in _CUP_SERVICES and priority in {"U", "B", "D"}:
+        relaxed = [
+            slot
+            for slot in _cup_relaxed(
+                [line for line in world.splitlines() if "slot_id=" in line],
+                now=now, lang=_lang(chat), gender=_gender(chat), procedure=procedure,
+            )
+            if slot.get("slot_id") not in taken and slot.get("facility", "").startswith("agent:")
+            and slot["facility"] != agent and slot["facility"] not in unavailable
+        ]
         await _cup_cross_asst(
-            city, message, chat, sent, citizen, procedure, priority, now, number, taken, replacing=replacing,
+            city, message, chat, sent, citizen, procedure, priority, now, number, taken,
+            replacing=replacing, relaxed=relaxed,
         )
 
 

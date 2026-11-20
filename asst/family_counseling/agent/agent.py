@@ -1379,8 +1379,12 @@ _OUR_DOCTORS = {
 }
 
 
+def _our_doctor(doctor_id: str) -> tuple[str, str] | None:
+    return _OUR_DOCTORS.get(doctor_id) or _OUR_DOCTORS.get(f"asst-bicocca-{doctor_id.rsplit('-', 1)[-1]}")
+
+
 def _doctor_fits(slot: dict[str, str], lang: str, gender: str) -> bool:
-    known = _OUR_DOCTORS.get(slot.get("doctor_id", ""))
+    known = _our_doctor(slot.get("doctor_id", ""))
     if known is None:
         return lang in {"", "it"} and not gender
     return (not lang or lang in known[0].split("/")) and (not gender or gender == known[1])
@@ -1403,7 +1407,7 @@ def _partner_offer(slot: dict[str, str], me: str, priority: str | None, request_
     ]
     if day:
         parts.append(f"agenda_day={day}")
-    if known := _OUR_DOCTORS.get(slot.get("doctor_id", "")):
+    if known := _our_doctor(slot.get("doctor_id", "")):
         parts += [f"doctor_lang={known[0]}", f"doctor_gender={known[1]}"]
     parts += [f"expiry={at}", f"request_id={request_id}"]
     if priority:
@@ -1464,8 +1468,9 @@ async def _answer_search(
     slots, reserved = _facility_slots(
         lines, now=now, priority=priority, procedure=procedure, me=agent
     )
-    want_lang = fields.get("lang", "")
+    want_lang = fields.get("lang", "").lower()
     want_gender = fields.get("gender_preference") or fields.get("gender") or ""
+    want_gender = want_gender if want_gender in {"m", "f"} else ""
     slots = [slot for slot in slots if _doctor_fits(slot, want_lang, want_gender)]
     if slots:
         offers = [_partner_offer(slot, agent, priority, rid) for slot in slots[:3]]

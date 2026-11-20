@@ -90,5 +90,15 @@ slots, _ = cup._cup_partner_slots(partner_chat(lie, "need.request rx=prescriptio
                                    {PARTNER: "rq-1"}, "VIS-FIS", "B", NOW, CIT, set())
 check("genere dichiarato contro la tabella (h3 e' m): scartato", slots == [])
 
+print("CUP - insieme vuoto: alternativa rilassata (122: inglese, B, nessun h1 in 2 giorni)")
+LATE = "2026-11-30T09:00:00+01:00"  # lunedi', fuori dalla finestra B
+lines = [f"slot_id=S-L doctor_id=h1 facility=agent:p/hosp procedure=VIS-FIS at={LATE} day=mon free=1",
+         f"slot_id=S-2 doctor_id=h2 facility=agent:p/hosp procedure=VIS-FIS at=2026-11-25T09:00:00+01:00 day=wed free=1"]
+check("fitting B inglese: vuoto", cup.fitting(lines, now=NOW, priority="B", lang="en", procedure="VIS-FIS") == [])
+got = cup._cup_relaxed(lines, now=NOW, lang="en", gender=None, procedure="VIS-FIS")
+check("rilassata: prima la finestra (h1 inglese il lunedi' dopo)", [g["slot_id"] for g in got] == ["S-L"])
+got = cup._cup_relaxed(lines[1:], now=NOW, lang="en", gender=None, procedure="VIS-FIS")
+check("rilassata: poi la lingua (h2 italiano)", [g["slot_id"] for g in got] == ["S-2"])
+
 print("FALLITE:", FAILS if FAILS else "nessuna")
 sys.exit(1 if FAILS else 0)
