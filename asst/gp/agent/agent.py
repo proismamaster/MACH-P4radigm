@@ -476,13 +476,16 @@ def _gp_request(chat: list[Message], citizen: str) -> tuple[str | None, str | No
             latest_code = code
     if latest_code is None:
         # Citizens write free text ("mal di schiena", "cuore che batte"): fall back to keywords.
-        for row in chat:
+        # Most recent message wins; two symptom families in one message stay unresolved.
+        for row in reversed(chat):
             if row.sender != citizen:
                 continue
             lowered = row.text.lower()
-            for name, phrases in _GP_KEYWORDS:
-                if any(phrase in lowered for phrase in phrases):
-                    return name, None
+            found = {name for name, phrases in _GP_KEYWORDS if any(p in lowered for p in phrases)}
+            if len(found) == 1:
+                return found.pop(), None
+            if found:
+                return None, None
     return latest_code, None
 
 
@@ -571,7 +574,9 @@ async def _gp(city: City, message: Message, chat: list[Message], *, urgent: bool
     agent = city.agent_id
     if _we(chat, agent, "escalate.emergency", to=citizen, word="escalate.emergency"):
         return
-    if urgent or (message.sender == citizen and _emergency(message)):
+    # Scan the whole citizen history: the keyword fallback reads it too, so a red flag in an
+    # older message must escalate before any prescription.
+    if urgent or any(row.sender == citizen and _emergency(row) for row in chat):
         await _gp_send(city, message, citizen, "escalate.emergency reason=red_flag")
         return
 
