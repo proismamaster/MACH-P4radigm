@@ -12,10 +12,13 @@ import asyncio
 import logging
 import os
 import re
-from collections import OrderedDict
-from collections.abc import Callable
+from collections import OrderedDict, deque
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
+from secrets import token_hex
 
 from city_sdk.city import LEDGER, CapError, City, Message, Need, OutOfScope, clinical, understood
 
@@ -61,6 +64,8 @@ _PULL_TRIES = 24
 _PULL_PAUSE = 0.25
 # Needs whose sent offers this process remembers; the oldest is forgotten first.
 _SENT_NEEDS = 4096
+_CUP_MAX_TEXT = 2000
+_AGENDA_DAYS = frozenset({"mon", "tue", "wed", "thu", "fri"})
 
 
 def role_of() -> str:
@@ -86,8 +91,16 @@ async def main(need: Need, city: City) -> None:
     text = message.text or need.summary
     if clinical(text):
         raise OutOfScope()
+    role = role_of()
+    if role == "booking_centre":
+        if not message.need_id:
+            return
+        async with _case_lock(message.need_id):
+            chat = await city.history(need_id=message.need_id)
+            await handle(role, city, message, chat)
+        return
     case = await city.history(need_id=message.need_id)
-    await handle(role_of(), city, message, case)
+    await handle(role, city, message, case)
 
 
 def _asks_address(message: Message) -> bool:
@@ -140,7 +153,7 @@ async def handle(role: str, city: City, message: Message, chat: list[Message]) -
     if role == "gp":
         await _gp(city, message, chat)
     elif role == "booking_centre":
-        await _desk(city, message, chat, hold_self=False, fixed=None)
+        await _booking_centre(city, message, chat)
     elif role == "hospital":
         await _facility(city, message, chat, reports=False, hold_self=False)
     elif role == "specialist_care":
@@ -525,11 +538,11 @@ def _asked(chat: list[Message], agent: str, procedure: str, page: int) -> bool:
 def _offered(chat: list[Message], agent: str) -> set[str]:
     found: set[str] = set()
     for row in chat:
-        if row.sender != agent or "offer" not in words(row.text):
+        if row.sender != agent:
             continue
-        slot = fields_of(row.text).get("slot_id")
-        if slot:
-            found.add(slot)
+        for offer in _offer_blocks(row.text):
+            if slot := offer.get("slot_id"):
+                found.add(slot)
     return found
 
 
@@ -538,16 +551,15 @@ def _withdrawn(chat: list[Message], agent: str) -> set[str]:
 
     by_offer: dict[str, str] = {}
     for row in chat:
-        if row.sender != agent or "offer" not in words(row.text):
+        if row.sender != agent:
             continue
-        fields = fields_of(row.text)
-        offer_id = fields.get("offer_id")
-        slot = fields.get("slot_id")
-        if offer_id and slot:
-            by_offer[offer_id] = slot
+        for offer in _offer_blocks(row.text):
+            offer_id = offer["offer_id"]
+            if slot := offer.get("slot_id"):
+                by_offer[offer_id] = slot
     dropped: set[str] = set()
     for row in chat:
-        if "cancel" not in words(row.text):
+        if row.sender != agent or first_word(row.text) != "cancel":
             continue
         slot = by_offer.get(fields_of(row.text).get("offer_id", ""))
         if slot:
@@ -583,10 +595,28 @@ def _gender(chat: list[Message]) -> str | None:
     return None
 
 
-def _offer_line(slot: dict[str, str], number: str | None, priority: str | None) -> str:
+def _cup_days(chat: list[Message], citizen: str) -> set[str]:
+    for row in reversed(chat):
+        if row.sender != citizen:
+            continue
+        value = row.body.get("days")
+        if isinstance(value, (tuple, list)):
+            days = {day.lower() for day in value if isinstance(day, str)}
+        else:
+            match = re.search(r"(?:^|\s)days=(\[[^\]]*\]|[^\s]+)", row.text)
+            raw = value if isinstance(value, str) else (match[1] if match else "")
+            days = set(re.split(r"[\s,;|\[\]]+", raw.lower()))
+        if recognized := days & _AGENDA_DAYS:
+            return recognized
+    return set()
+
+
+def _offer_line(
+    slot: dict[str, str], number: str | None, priority: str | None, *, offer_id: str | None = None
+) -> str:
     parts = [
         "offer",
-        f"offer_id=of-{slot['slot_id']}",
+        f"offer_id={offer_id or 'of-' + slot['slot_id']}",
         f"slot_id={slot['slot_id']}",
         f"doctor_id={slot['doctor_id']}",
         f"facility={slot['facility']}",
@@ -602,11 +632,22 @@ def _offer_line(slot: dict[str, str], number: str | None, priority: str | None) 
     return " ".join(parts)
 
 
+def _offer_blocks(text: str) -> list[dict[str, str]]:
+    offers = []
+    for line in text.splitlines():
+        if first_word(line) == "offer":
+            fields = fields_of(line)
+            if fields.get("offer_id"):
+                offers.append(fields)
+    return offers
+
+
 def _our_offer(chat: list[Message], agent: str, offer_id: str) -> dict[str, str]:
-    token = f"offer_id={offer_id}"
     for row in chat:
-        if row.sender == agent and token in row.text.split() and "offer" in words(row.text):
-            return fields_of(row.text)
+        if row.sender == agent:
+            for offer in _offer_blocks(row.text):
+                if offer["offer_id"] == offer_id:
+                    return offer
     return {}
 
 
@@ -627,16 +668,18 @@ class _Sent:
     citizen drop all offers, so ``again`` holds only what was re-sent for ``trigger``.
     """
 
-    __slots__ = ("offers", "trigger", "again")
+    __slots__ = ("offers", "trigger", "again", "outbox", "uncertain_confirmation")
 
     def __init__(self) -> None:
         self.offers: set[str] = set()
         self.trigger = ""
         self.again: set[str] = set()
+        self.outbox: deque[Message] = deque(maxlen=16)
+        self.uncertain_confirmation = False
 
 
-# Every Ledger or citizen message opens its own turn, and turns of one need run at the same
-# time. Each reads the case before the others' offers are in it, so offers wait on this.
+# Turns of the same need may overlap. Keep state-changing CUP turns serial and
+# read history after acquiring the lock, so they see preceding decisions.
 # An entry lives only while a turn holds or waits on its lock.
 _GATES: dict[str, _Gate] = {}
 _SENT: OrderedDict[str, _Sent] = OrderedDict()
@@ -651,6 +694,202 @@ def _sent(key: str) -> _Sent:
     else:
         _SENT.move_to_end(key)
     return entry
+
+
+@asynccontextmanager
+async def _case_lock(key: str) -> AsyncIterator[None]:
+    gate = _GATES.get(key)
+    if gate is None:
+        gate = _GATES[key] = _Gate()
+    gate.turns += 1
+    try:
+        async with gate.lock:
+            yield
+    finally:
+        gate.turns -= 1
+        if gate.turns == 0 and _GATES.get(key) is gate:
+            del _GATES[key]
+
+
+@dataclass
+class _CupCase:
+    offers: dict[str, dict[str, str]] = field(default_factory=dict)
+    confirmation: Message | None = None
+    cancellation: Message | None = None
+    booked: bool = False
+
+
+def _cup_case(chat: list[Message], agent: str, citizen: str) -> _CupCase:
+    state = _CupCase()
+    for row in chat:
+        if row.sender != agent:
+            continue
+        act = first_word(row.text)
+        fields = fields_of(row.text)
+        if row.recipient == citizen:
+            if act == "offer":
+                offers = _offer_blocks(row.text)
+                # The reference used a separate message and of-<slot_id> for each offer.
+                legacy = len(offers) == 1 and offers[0]["offer_id"] == "of-" + offers[0].get("slot_id", "")
+                if not legacy:
+                    state.offers.clear()
+                state.offers.update({offer["offer_id"]: offer for offer in offers})
+                state.cancellation = None
+            elif act == "cancel":
+                state.offers.clear()
+                state.confirmation = None
+                state.cancellation = row
+            elif act == "booking.receipt" and fields.get("booking_id") and fields.get("ledger_ref"):
+                state.booked = True
+        elif act == "confirm" and fields.get("citizen") == citizen and row.recipient.startswith("agent:"):
+            state.confirmation = row
+    return state
+
+
+def _cup_input(message: Message) -> tuple[str, dict[str, str]]:
+    if message.type != "chat":
+        return message.type, {
+            key: value for key, value in message.body.items()
+            if isinstance(value, str) and value and not any(char.isspace() for char in value)
+        }
+    acts = words(message.text) & {"confirm", "booking.receipt", "cancel"}
+    if len(acts) > 1:
+        return "", {}
+    act = next(iter(acts), first_word(message.text))
+    fields: dict[str, str] = {}
+    for token in message.text.replace(",", " ").split():
+        key, equals, value = token.partition("=")
+        if not equals:
+            continue
+        if not key or not value or key in fields:
+            return act, {}
+        fields[key] = value.strip(".,;:!?")
+    return act, fields
+
+
+async def _cup_post(city: City, inbound: Message, cache: _Sent, to: str, text: str) -> None:
+    msg_id = await city.say(to, text)
+    cache.outbox.append(Message(
+        type="chat", sender=city.agent_id, msg_id=msg_id, recipient=to,
+        need_id=inbound.need_id, conversation_id=inbound.conversation_id, body={"text": text},
+    ))
+
+
+async def _cup_send(city: City, inbound: Message, cache: _Sent, to: str, text: str) -> bool:
+    try:
+        await _cup_post(city, inbound, cache, to, text)
+    except CapError:
+        return False
+    return True
+
+
+async def _booking_centre(city: City, message: Message, chat: list[Message]) -> None:
+    if message.sender == city.agent_id or not message.need_id:
+        return
+    key = message.need_id
+    cache = _sent(key)
+    visible = {row.msg_id: row for row in chat}
+    sent_ids = {row.msg_id for row in cache.outbox}
+    # The Relay acknowledgement may precede the same outbound message appearing in history.
+    chat = [
+        *(row for row in chat if row.msg_id not in sent_ids),
+        *(visible.get(row.msg_id, row) for row in cache.outbox),
+    ]
+    chat = [
+        row for row in chat
+        if not row.conversation_id or not message.conversation_id
+        or row.conversation_id == message.conversation_id
+    ]
+    citizen = next((row.sender for row in chat if row.sender.startswith("citizen:")), None)
+    if citizen is None:
+        return
+
+    state = _cup_case(chat, city.agent_id, citizen)
+    if state.booked:
+        return
+    act, fields = _cup_input(message)
+    if act == "confirm" and message.sender == citizen:
+        await _cup_confirm(city, message, chat, cache, state, citizen, fields)
+        return
+
+    pending = state.confirmation
+    if pending is not None:
+        received_at = _when(message.sent_at)
+        sent_at = _when(pending.sent_at)
+        if message.sender != pending.recipient or (sent_at and received_at and received_at < sent_at):
+            return
+        choice = fields_of(pending.text)
+        if act == "booking.receipt":
+            if any(fields[key] != choice.get(key) for key in ("offer_id", "slot_id", "citizen") if key in fields):
+                return
+            booking_id, ledger_ref = fields.get("booking_id"), fields.get("ledger_ref")
+            if booking_id and ledger_ref:
+                receipt = f"booking.receipt booking_id={booking_id} ledger_ref={ledger_ref}"
+                await _cup_send(city, message, cache, citizen, receipt)
+        elif act == "cancel" and fields.get("offer_id") == choice.get("offer_id"):
+            await _cup_cancel(
+                city, message, chat, cache, citizen,
+                f"cancel offer_id={choice['offer_id']} reason=facility_cancelled",
+            )
+        return
+
+    if not state.offers and (message.sender == citizen or message.sender == LEDGER):
+        trigger = state.cancellation or message
+        await _advance_alone(
+            city, trigger, chat, key, fixed=None, replacing=state.cancellation is not None, bundle=True,
+        )
+
+
+async def _cup_confirm(
+    city: City,
+    message: Message,
+    chat: list[Message],
+    cache: _Sent,
+    state: _CupCase,
+    citizen: str,
+    fields: dict[str, str],
+) -> None:
+    offer_id = fields.get("offer_id", "")
+    consent = fields.get("consent_ref") or (fields.get("consent") if message.type == "confirm" else None)
+    offer = state.offers.get(offer_id)
+    if state.confirmation is not None or cache.uncertain_confirmation or not offer or not consent:
+        return
+    slot = offer.get("slot_id")
+    facility = offer.get("facility", "")
+    number = offer.get("prescription_number")
+    if not slot or not number or not facility.startswith("agent:") or facility == city.agent_id:
+        return
+    expected = {"slot_id": slot, "facility": facility, "prescription_number": number, "citizen": citizen}
+    if any(key in fields and fields[key] != value for key, value in expected.items()):
+        return
+    confirmation = (
+        f"confirm offer_id={offer_id} slot_id={slot} citizen={citizen} "
+        f"consent_ref={consent} facility={facility} prescription_number={number}"
+    )
+    # If the send has no definite outcome, wait for history rather than sending a second confirm.
+    cache.uncertain_confirmation = True
+    try:
+        await _cup_post(city, message, cache, facility, confirmation)
+    except CapError as error:
+        if error.code in {"DUPLICATE", "IDEMPOTENCY_CONFLICT"} or error.http_status() >= 500:
+            return
+        reason = "facility_unavailable" if error.code == "TARGET_NOT_VISIBLE" else "confirmation_rejected"
+        notice = f"cancel offer_id={offer_id} reason={reason} facility={facility} L'orario non è prenotabile."
+        await _cup_cancel(city, message, chat, cache, citizen, notice)
+    else:
+        cache.uncertain_confirmation = False
+
+
+async def _cup_cancel(
+    city: City, message: Message, chat: list[Message], cache: _Sent, citizen: str, notice: str
+) -> None:
+    if await _cup_send(city, message, cache, citizen, notice):
+        cache.uncertain_confirmation = False
+        cancellation = cache.outbox[-1]
+        await _advance_alone(
+            city, cancellation, [*chat, cancellation], message.need_id or message.msg_id,
+            fixed=None, replacing=True, bundle=True,
+        )
 
 
 async def _desk(
@@ -688,17 +927,8 @@ async def _advance(
     replacing: bool,
 ) -> None:
     key = message.need_id or message.msg_id
-    gate = _GATES.get(key)
-    if gate is None:
-        gate = _GATES[key] = _Gate()
-    gate.turns += 1
-    try:
-        async with gate.lock:
-            await _advance_alone(city, message, chat, key, fixed=fixed, replacing=replacing)
-    finally:
-        gate.turns -= 1
-        if gate.turns == 0 and _GATES.get(key) is gate:
-            del _GATES[key]
+    async with _case_lock(key):
+        await _advance_alone(city, message, chat, key, fixed=fixed, replacing=replacing)
 
 
 async def _advance_alone(
@@ -709,6 +939,7 @@ async def _advance_alone(
     *,
     fixed: str | None,
     replacing: bool,
+    bundle: bool = False,
 ) -> None:
     agent = city.agent_id
     citizen = _citizen(chat)
@@ -804,6 +1035,37 @@ async def _advance_alone(
         )
         if slot.get("slot_id") not in taken
     ]
+    if bundle:
+        days = _cup_days(chat, citizen)
+        unavailable = {
+            fields_of(row.text).get("facility")
+            for row in chat
+            if row.sender == agent and first_word(row.text) == "cancel"
+            and "reason=facility_unavailable" in row.text.split()
+        }
+        chosen = [
+            slot for slot in chosen
+            if slot.get("facility", "").startswith("agent:") and slot["facility"] != agent
+            and slot["facility"] not in unavailable
+            and (not days or slot.get("day") in days)
+        ]
+    if chosen and bundle:
+        batch = token_hex(6)
+        instruction = "Scegli uno degli orari."
+        options = []
+        delivered = set()
+        for index, slot in enumerate(chosen[:3], 1):
+            line = _offer_line(slot, number, priority, offer_id=f"of-{batch}-{index}")
+            if at := _when(slot["at"]):
+                line += f" Il {at:%d/%m} alle {at:%H:%M}."
+            if len("\n".join([*options, line, instruction])) <= _CUP_MAX_TEXT:
+                options.append(line)
+                delivered.add(slot["slot_id"])
+        if options and await _cup_send(city, message, sent, citizen, "\n".join([*options, instruction])):
+            sent.offers.update(delivered)
+            if replacing:
+                sent.again.update(delivered)
+        return
     if chosen:
         for slot in chosen[:3]:
             if await _say(city, citizen, _offer_line(slot, number, priority)):
