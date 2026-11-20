@@ -1105,8 +1105,8 @@ def _cup_relaxed(
     alternative, do not book outside S on our own). First the time window (same language and
     gender, any later day), then the language (an Italian-speaking doctor)."""
     relaxed = fitting(lines, now=now, priority="P", lang=lang, gender=gender, procedure=procedure)
-    if not relaxed and (lang not in {"it", ""} or gender):
-        relaxed = fitting(lines, now=now, priority="P", lang="it", procedure=procedure)
+    if not relaxed and lang not in {"it", ""}:
+        relaxed = fitting(lines, now=now, priority="P", lang="it", gender=gender, procedure=procedure)
     return relaxed
 
 
