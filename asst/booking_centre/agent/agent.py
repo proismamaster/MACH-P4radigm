@@ -567,7 +567,9 @@ class _Sent:
     citizen drop all offers, so ``again`` holds only what was re-sent for ``trigger``.
     """
 
-    __slots__ = ("offers", "trigger", "again", "outbox", "uncertain_confirmation", "partner_search_started")
+    __slots__ = (
+        "offers", "trigger", "again", "outbox", "uncertain_confirmation", "partner_search_started", "stale_reads",
+    )
 
     def __init__(self) -> None:
         self.offers: set[str] = set()
@@ -576,6 +578,8 @@ class _Sent:
         self.outbox: deque[Message] = deque(maxlen=16)
         self.uncertain_confirmation = False
         self.partner_search_started: float | None = None
+        # Ledger agenda/slots answers read before a P1 renewal: stale once the renewal is asked.
+        self.stale_reads: set[str] = set()
 
 
 # Turns of the same need may overlap. Keep state-changing CUP turns serial and
@@ -734,7 +738,7 @@ async def _booking_centre(city: City, message: Message, chat: list[Message]) -> 
     if number and (pending is None or message.sender == LEDGER):
         reply = _cup_prescription(chat if pending is None else [message], number, citizen)
         if reply is not None and reply.get("state") == "expired":
-            await _cup_request_renewal(city, message, cache, citizen, number)
+            await _cup_request_renewal(city, message, chat, cache, citizen, number)
             return
 
     if pending is not None:
@@ -755,7 +759,7 @@ async def _booking_centre(city: City, message: Message, chat: list[Message]) -> 
         elif act == "cancel" and fields.get("offer_id") == choice.get("offer_id"):
             citizen_offer = choice.get("cup_offer_id", choice["offer_id"])
             if fields.get("reason") == "PRESCRIPTION_EXPIRED" and number:
-                await _cup_request_renewal(city, message, cache, citizen, number)
+                await _cup_request_renewal(city, message, chat, cache, citizen, number)
             else:
                 await _cup_cancel(
                     city, message, chat, cache, citizen,
@@ -873,10 +877,13 @@ async def _cup_cross_consent(
 
 
 async def _cup_request_renewal(
-    city: City, message: Message, cache: _Sent, citizen: str, number: str,
+    city: City, message: Message, chat: list[Message], cache: _Sent, citizen: str, number: str,
 ) -> None:
     if not _CUP_TOKEN.fullmatch(number):
         return
+    cache.stale_reads |= {
+        row.msg_id for row in chat if row.sender == LEDGER and first_word(row.text) in {"agenda", "slots"}
+    }
     text = (
         "data.request purpose=prescription_renewal fields=prescription_number "
         f"prescription_number={number} La ricetta è scaduta. Chiedi al medico di base di rinnovarla "
@@ -1101,12 +1108,28 @@ async def _advance_alone(
     sent = _sent(key)
     case = _cup_case(chat, agent, citizen)
     number = _cup_number(chat, citizen, case.expired_prescriptions)
+    renewal = case.renewal_request
+
+    def fresh(rows: list[Message]) -> list[Message]:
+        # After a P1 renewal the agenda and the slots read before it are stale: drop the Ledger
+        # answers recorded at renewal time and ask again. Our own messages keep send order, so
+        # "asked again" means sent after the renewal request.
+        if renewal is None:
+            return rows
+        cut = next((i for i, row in enumerate(rows) if row.msg_id == renewal.msg_id), None)
+        ours = rows if cut is None else rows[cut + 1:]
+        return [
+            row for row in rows
+            if (row.sender == LEDGER and row.msg_id not in sent.stale_reads)
+            or (row.sender != LEDGER and row in ours)
+        ]
+
     # Ask, then read the reply from history: the push of a ledger message does not open a turn.
     for _pass in range(3):
         reply = _cup_prescription(chat, number, citizen)
         state = None if reply is None else reply.get("state")
         if state == "expired" and number:
-            await _cup_request_renewal(city, message, sent, citizen, number)
+            await _cup_request_renewal(city, message, chat, sent, citizen, number)
             return
         if state not in (None, "issued"):
             return
@@ -1127,7 +1150,7 @@ async def _advance_alone(
             lookup = f"prescription prescription_number={number}"
             if not any(row.sender == agent and row.recipient == LEDGER and row.text == lookup for row in chat):
                 await _cup_send(city, message, sent, LEDGER, lookup)
-            if not _exact(chat, agent, "agenda"):
+            if not _exact(fresh(chat), agent, "agenda"):
                 await _cup_send(city, message, sent, LEDGER, "agenda")
             chat = await _until(
                 city,
@@ -1139,22 +1162,22 @@ async def _advance_alone(
             continue
         if not procedure:
             return
-        agenda = _ledger(chat, "agenda")
+        agenda = _ledger(fresh(chat), "agenda")
         now = _when("" if agenda is None else agenda.get("agenda_now", ""))
-        world = _latest_slots(chat)
+        world = _latest_slots(fresh(chat))
         if now is not None and world is not None:
             break
         if _pass == 2:
             return
-        if now is None and not _exact(chat, agent, "agenda"):
+        if now is None and not _exact(fresh(chat), agent, "agenda"):
             await _cup_send(city, message, sent, LEDGER, "agenda")
-        if world is None and not _asked(chat, agent, procedure, 1):
+        if world is None and not _asked(fresh(chat), agent, procedure, 1):
             await _cup_send(city, message, sent, LEDGER, f"world procedure={procedure} page=1")
         chat = await _until(
             city,
             message.need_id,
             chat,
-            lambda rows: _has_agenda(rows) and _latest_slots(rows) is not None,
+            lambda rows: _has_agenda(fresh(rows)) and _latest_slots(fresh(rows)) is not None,
         )
         chat = _cup_history(chat, sent, agent, key)
     else:
@@ -1203,7 +1226,7 @@ async def _advance_alone(
         return
     page, pages = _page(world)
     if page < pages and page < _MAX_PAGE:
-        if not _asked(chat, agent, procedure, page + 1):
+        if not _asked(fresh(chat), agent, procedure, page + 1):
             await _cup_send(city, message, sent, LEDGER, f"world procedure={procedure} page={page + 1}")
         return
     if number and procedure in _CUP_SERVICES and priority in {"U", "B", "D"}:

@@ -206,14 +206,29 @@ class CupRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(case.out(CITIZEN, "offer")), 1, "A reply about the old prescription cannot unlock an offer")
 
         await case.turn(case.rx_reply(NEW_RX))
+        after_renewal = case.sent[case.sent.index(case.renewal_requests()[0]) + 1:]
+        reads = [row.text for row in after_renewal if row.recipient == LEDGER]
+        self.assertIn("agenda", reads, "After a renewal the agenda read before it is stale: ask again")
+        self.assertTrue(any(text.startswith("world ") for text in reads), "After a renewal ask the slots again")
+        self.assertEqual(len(case.out(CITIZEN, "offer")), 1, "No offer from the stale slots read before the renewal")
+
+        # Meanwhile S-LOCAL-LATER was taken: the fresh read has only S-NEW.
+        case.add(LEDGER, "agenda agenda_now=2026-11-23T08:00:00+01:00", conversation="ledger")
+        fresh_slots = case.add(
+            LEDGER,
+            f"slots page=1/1\nslot_id=S-NEW doctor_id=doctor-h1 facility={HOSPITAL} "
+            f"procedure={PROCEDURE} at={LATER_APPOINTMENT} day=mon free=1",
+            conversation="ledger",
+        )
+        await case.turn(fresh_slots)
         _, new_offer = case.out(CITIZEN, "offer")
         self.assertEqual(understood(new_offer).body.get("prescription_number"), NEW_RX)
-        self.assertEqual([offer["slot_id"] for offer in case.choices()], ["S-LOCAL-LATER"])
+        self.assertEqual([offer["slot_id"] for offer in case.choices()], ["S-NEW"])
         await case.accept_offer()
         previous, latest = case.out(HOSPITAL, "confirm")
         self.assertEqual(understood(previous).body.get("prescription_number"), OLD_RX)
         self.assertEqual(understood(latest).body.get("prescription_number"), NEW_RX)
-        self.assertEqual(understood(latest).body.get("slot_id"), "S-LOCAL-LATER")
+        self.assertEqual(understood(latest).body.get("slot_id"), "S-NEW")
 
     async def test_p1_ledger_expiry_in_same_need_requests_renewal_once(self):
         case = Case(self.brain, "ledger-expiry")
