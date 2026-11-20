@@ -1202,4 +1202,9 @@ async def _on_reported(city: City, message: Message, chat: list[Message]) -> Non
     token = f"booking_id={booking_id}"
     if _we(chat, city.agent_id, token, to=citizen, word="report"):
         return
-    await _say(city, citizen, f"report booking_id={booking_id} outcome_code=VISIT")
+    await _say(
+        city, citizen,
+        f"report booking_id={booking_id} outcome_code=VISIT Grazie per essere venuto. "
+        "Il referto della visita è archiviato. Se il suo medico di base le prescrive un controllo, "
+        "può prenotarlo al centro prenotazioni con la nuova ricetta.",
+    )
