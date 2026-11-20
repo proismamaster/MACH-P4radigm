@@ -363,8 +363,9 @@ def _doctor_spec(doctor_id: str) -> tuple[frozenset[str], str, frozenset[str]] |
 
 def _unknown_doctor_ok(lang: str, gender: str | None) -> bool:
     # The live world may use doctor ids that are not in the hand-written table (the kit
-    # example uses D-3). Keep such a slot unless the citizen needs something we cannot check.
-    return lang in {"it", "en", ""} and not gender
+    # example uses D-3). Keep such a slot only for Italian with no gender preference: the language
+    # and gender of an unknown doctor cannot be checked.
+    return lang in {"it", ""} and not gender
 
 
 def _speaks(doctor_id: str, lang: str) -> bool:

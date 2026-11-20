@@ -1132,7 +1132,8 @@ async def _on_checked_in(
         return
     token = f"booking_id={booking_id}"
     if citizen and not _we(chat, city.agent_id, token, to=citizen, word="checkin"):
-        await _say(city, citizen, f"checkin booking_id={booking_id}")
+        ledger_ref = fields_of(message.text).get("ledger_ref")
+        await _say(city, citizen, f"checkin booking_id={booking_id}" + (f" ledger_ref={ledger_ref}" if ledger_ref else ""))
     if not reports:
         return
     # Rule: ask report_sharing consent first; the report goes to the Ledger when the citizen answers.
@@ -1146,6 +1147,8 @@ async def _on_checked_in(
 
 
 _CONSENT_ASK = "purpose=report_sharing"
+# Bookings whose report this process already sent to the Ledger (parallel-turn guard).
+_REPORT_SENT: set[str] = set()
 
 
 def _consent_pending(chat: list[Message], agent: str) -> bool:
@@ -1181,8 +1184,14 @@ async def _on_report_consent(city: City, message: Message, chat: list[Message]) 
     command = f"report booking_id={booking_id} outcome_code=VISIT"
     if consent_ref:
         command += f" consent_ref={consent_ref}"
+    # Two answers can open parallel turns before history shows our report: check and mark
+    # in-process with no await in between, so only one turn sends it.
+    if booking_id in _REPORT_SENT:
+        return
+    _REPORT_SENT.add(booking_id)
     # No consent_ref in the answer = refusal in plain words: archive the report without sharing.
     if not await _say(city, LEDGER, command):
+        _REPORT_SENT.discard(booking_id)
         return
     token = f"booking_id={booking_id}"
     found = await _await_line(city, message.need_id, chat, "reported", token, op="report")

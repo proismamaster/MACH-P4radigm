@@ -516,6 +516,36 @@ def _gp_protocols(chat: list[Message]) -> dict[str, tuple[str, str]]:
     return rules
 
 
+def _gp_world_red_flags(chat: list[Message]) -> set[str]:
+    """Red-flag phrases from the protocol table in ``world`` (list, or text split by , ; |)."""
+
+    flags: set[str] = set()
+    for row in chat:
+        if row.sender != LEDGER:
+            continue
+        structured = row.body.get("protocols")
+        if isinstance(structured, list):
+            values = [item.get("red_flags") for item in structured if isinstance(item, dict)]
+        elif first_word(row.text) in {"world", "slots", "catalogue", "protocol", "protocols"}:
+            values = [fields_of(line).get("red_flags") for line in row.text.splitlines()]
+        else:
+            continue
+        for value in values:
+            items = value if isinstance(value, (list, tuple)) else re.split(r"[,;|]", value or "")
+            for item in items:
+                phrase = str(item).replace("_", " ").replace("-", " ").strip().lower()
+                if len(phrase) >= 4:
+                    flags.add(phrase)
+    return flags
+
+
+def _gp_world_emergency(chat: list[Message], citizen: str) -> bool:
+    flags = _gp_world_red_flags(chat)
+    return bool(flags) and any(
+        row.sender == citizen and any(flag in row.text.lower() for flag in flags) for row in chat
+    )
+
+
 def _gp_world_received(chat: list[Message]) -> bool:
     return any(
         row.sender == LEDGER
@@ -609,6 +639,14 @@ async def _gp(city: City, message: Message, chat: list[Message], *, urgent: bool
     command = _gp_attempt(chat, agent, citizen, number)
     if not command:
         protocol = await _gp_select_protocol(city, message, chat, citizen, code, renewal)
+        # Level 8 hides red flags: the protocol table in world lists them per symptom.
+        try:
+            fresh = _gp_case(await city.history(need_id=message.need_id), message)
+        except CapError:
+            fresh = chat
+        if not renewal and _gp_world_emergency(fresh, citizen):
+            await _gp_send(city, message, citizen, "escalate.emergency reason=red_flag")
+            return
         if protocol is None:
             return
         procedure, priority = protocol
@@ -634,35 +672,50 @@ async def _gp_announce(
     city: City, message: Message, chat: list[Message], citizen: str, command: dict[str, str]
 ) -> None:
     agent = city.agent_id
-    # One prescription per need: if any prescription already went to this citizen, stop.
-    if any(row.sender == agent and row.recipient == citizen and first_word(row.text) == "prescription"
-           for row in chat):
-        return
     number = command["prescription_number"]
     reply = _gp_ledger_rx(chat, number, heads={"prescribed", "refused"})
     if reply is None:
-        # The Ledger may answer with its own prescription_number: take its latest answer.
-        reply = next((row for row in reversed(chat) if row.sender == LEDGER
-                      and (first_word(row.text) if row.type == "chat" else row.type)
-                      in {"prescribed", "refused"}), None)
+        # The Ledger may answer with its own prescription_number: accept only a `prescribed`
+        # line for this citizen and this procedure, never an unrelated Ledger line.
+        for row in reversed(chat):
+            if row.sender != LEDGER:
+                continue
+            act = first_word(row.text) if row.type == "chat" else row.type
+            values = fields_of(row.text) if row.type == "chat" else row.body
+            owner = values.get("patient") or values.get("citizen")
+            if act == "prescribed" and owner == citizen and values.get("procedure") == command["procedure"]:
+                reply = row
+                break
     if reply is None:
         # No Ledger confirmation yet: never announce a prescription the Ledger has not written.
         # The Ledger reply (its own turn, or the citizen's next message) brings us back here.
         return
-    if reply is not None:
-        values = fields_of(reply.text) if reply.type == "chat" else reply.body
-        act = first_word(reply.text) if reply.type == "chat" else reply.type
-        duplicate = values.get("code") == "DUPLICATE" or "DUPLICATE" in reply.text.split()
-        if act == "refused" and not duplicate:
-            failure = ("Mi dispiace, il registro non ha accettato la ricetta. "
-                       "Mi riscriva il disturbo e riprovo subito.")
-            if not any(row.sender == agent and row.recipient == citizen and row.text == failure
-                       for row in chat):
-                await _gp_send(city, message, citizen, failure)
+    values = fields_of(reply.text) if reply.type == "chat" else reply.body
+    act = first_word(reply.text) if reply.type == "chat" else reply.type
+    duplicate = values.get("code") == "DUPLICATE" or "DUPLICATE" in reply.text.split()
+    if act == "refused" and not duplicate:
+        failure = ("Mi dispiace, il registro non ha accettato la ricetta. "
+                   "Mi riscriva il disturbo e riprovo subito.")
+        if not any(row.sender == agent and row.recipient == citizen and row.text == failure
+                   for row in chat):
+            await _gp_send(city, message, citizen, failure)
+        return
+    if act == "refused":
+        # DUPLICATE: the prescription may exist. Announce it only after reading it back.
+        found = await _gp_lookup(city, message, chat, number)
+        if found is None:
             return
-        ledger_number = _gp_field(values.get("prescription_number"))
-        if act == "prescribed" and ledger_number:
-            number = ledger_number
+        stored = fields_of(found.text) if found.type == "chat" else found.body
+        owner = stored.get("patient") or stored.get("citizen")
+        if (owner and owner != citizen) or stored.get("state", "issued") != "issued":
+            return
+    ledger_number = _gp_field(values.get("prescription_number"))
+    if act == "prescribed" and ledger_number:
+        number = ledger_number
+    # One announcement per prescription number (a renewal has a new number and is announced).
+    if any(row.sender == agent and row.recipient == citizen and first_word(row.text) == "prescription"
+           and fields_of(row.text).get("prescription_number") == number for row in chat):
+        return
     notice = (f"prescription prescription_number={number} procedure={command['procedure']} "
               f"priority={command['priority']} "
               "Grazie per avermi scritto. La ricetta è registrata: con questo numero può prenotare "
