@@ -1,5 +1,19 @@
 # Journal (la voce più recente in alto)
 
+## 2026-11-20 22:12 — Ismail — GP online, PR #7 e #8 unite
+
+**Fatto**
+- GP 1.0.2 pubblicato alle 22:03 (merge completo con `main`). Percorsi 08 e 10: ricetta VIS-FIS B, `citizen.gp.protocol_match +2`.
+- PR #7: messaggi al cittadino cortesi e con il passo successivo (la review dava 0 su proattività, messaggio "curt").
+- PR #8 (CUP cross-ASST di Abed) corretta e unita: il CUP scartava ogni orario con id medico fuori dalla tabella (`D-3` dell'esempio del kit), anche nella propria ASST. Test `tools/test_cup_medici.py`.
+
+**Problemi**
+- Deploy dello specialist fallito alle 22:07 per la piattaforma ("agent ingress route did not become ready in time"), rilanciato alle 22:09.
+- I log della città rispondevano `503 DRAINING`. I percorsi 32, 33, 34, 38 non hanno avuto risposta durante i cambi di versione del GP: in locale il GP risponde bene, si aspetta il nuovo invio del cittadino.
+
+**Prossimo passo**
+- Specialist online prima delle 23:00, CUP 23:30-00:00, poi GP con messaggi cortesi.
+
 ## 2026-11-20 22:02 — Abed — Ricerca cross-ASST dal CUP
 
 **Fatto**
