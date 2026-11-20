@@ -42,6 +42,12 @@ _PROTOCOLS: dict[str, tuple[str, str]] = {
     "SYM-PALPITATIONS": ("VIS-CARD", "B"),
     "SYM-FOLLOWUP": ("VIS-CARD", "P"),
 }
+_GP_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("SYM-BACK", ("mal di schiena", "male alla schiena", "dolore alla schiena", "back pain")),
+    ("SYM-KNEE", ("ginocchio", "knee")),
+    ("SYM-PALPITATIONS", ("cuore che batte", "palpitazion", "batticuore", "heart racing", "palpitation")),
+    ("SYM-FOLLOWUP", ("controllo del cuore", "routine heart check")),
+)
 _RED_FLAGS = (
     "perdita di forza alle gambe",
     "loss of strength in the legs",
@@ -468,6 +474,15 @@ def _gp_request(chat: list[Message], citizen: str) -> tuple[str | None, str | No
             return None, renewal
         if latest_code is None and code and code.startswith("SYM-"):
             latest_code = code
+    if latest_code is None:
+        # Citizens write free text ("mal di schiena", "cuore che batte"): fall back to keywords.
+        for row in chat:
+            if row.sender != citizen:
+                continue
+            lowered = row.text.lower()
+            for name, phrases in _GP_KEYWORDS:
+                if any(phrase in lowered for phrase in phrases):
+                    return name, None
     return latest_code, None
 
 
