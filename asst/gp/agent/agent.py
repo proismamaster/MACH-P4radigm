@@ -577,7 +577,9 @@ async def _gp(city: City, message: Message, chat: list[Message], *, urgent: bool
     agent = city.agent_id
     if _we(chat, agent, "escalate.emergency", to=citizen, word="escalate.emergency"):
         return
-    if urgent or (message.sender == citizen and _emergency(message)):
+    # Scan the whole citizen history: the keyword fallback reads it too, so a red flag in an
+    # older message must escalate before any prescription.
+    if urgent or any(row.sender == citizen and _emergency(row) for row in chat):
         await _gp_send(city, message, citizen, "escalate.emergency reason=red_flag")
         return
 
@@ -616,7 +618,7 @@ async def _gp(city: City, message: Message, chat: list[Message], *, urgent: bool
         chat = await _until(
             city, message.need_id, chat,
             lambda rows: _gp_ledger_rx(rows, number, heads={"prescribed", "refused"}) is not None,
-            max_polls=8,
+            max_polls=24,
         )
         chat = _gp_case(chat, message)
 
@@ -640,6 +642,10 @@ async def _gp_announce(
         reply = next((row for row in reversed(chat) if row.sender == LEDGER
                       and (first_word(row.text) if row.type == "chat" else row.type)
                       in {"prescribed", "refused"}), None)
+    if reply is None:
+        # No Ledger confirmation yet: never announce a prescription the Ledger has not written.
+        # The Ledger reply (its own turn, or the citizen's next message) brings us back here.
+        return
     if reply is not None:
         values = fields_of(reply.text) if reply.type == "chat" else reply.body
         act = first_word(reply.text) if reply.type == "chat" else reply.type
@@ -653,7 +659,6 @@ async def _gp_announce(
         ledger_number = _gp_field(values.get("prescription_number"))
         if act == "prescribed" and ledger_number:
             number = ledger_number
-    # No Ledger answer yet: tell the citizen now (same turn as the write), as the protocol asks.
     notice = (f"prescription prescription_number={number} procedure={command['procedure']} "
               f"priority={command['priority']}")
     _LOG.info("gp need=%s announce %s", (message.need_id or "")[-12:], number)

@@ -938,6 +938,8 @@ async def _facility(
         await _on_reported(city, message, chat)
     elif "checkin" in kind and message.sender.startswith("citizen:"):
         await _on_checkin(city, message, chat, reports=reports)
+    elif reports and message.sender.startswith("citizen:") and _consent_pending(chat, city.agent_id):
+        await _on_report_consent(city, message, chat)
     elif "confirm" in kind:
         await _on_confirm(city, message, chat, hold_self=hold_self)
 
@@ -1129,12 +1131,60 @@ async def _on_checked_in(
     if not booking_id:
         return
     token = f"booking_id={booking_id}"
-    if reports and not _we(chat, city.agent_id, token, to=LEDGER, word="report"):
-        await _say(city, LEDGER, f"report booking_id={booking_id} outcome_code=VISIT")
     if citizen and not _we(chat, city.agent_id, token, to=citizen, word="checkin"):
         await _say(city, citizen, f"checkin booking_id={booking_id}")
     if not reports:
         return
+    # Rule: ask report_sharing consent first; the report goes to the Ledger when the citizen answers.
+    if citizen and not _we(chat, city.agent_id, "purpose=report_sharing", to=citizen, word="consent"):
+        await _say(
+            city, citizen,
+            f"consent purpose=report_sharing {token} La visita è registrata. "
+            "Posso condividere il referto con il suo medico di base? Se preferisce di no, "
+            "lo archivio senza condividerlo.",
+        )
+
+
+_CONSENT_ASK = "purpose=report_sharing"
+
+
+def _consent_pending(chat: list[Message], agent: str) -> bool:
+    """True after we asked report_sharing consent and before we sent the report to the Ledger."""
+
+    asked = any(
+        row.sender == agent and first_word(row.text) == "consent" and _CONSENT_ASK in row.text.split()
+        for row in chat
+    )
+    reported = any(
+        row.sender == agent and row.recipient == LEDGER and first_word(row.text) == "report" for row in chat
+    )
+    return asked and not reported
+
+
+async def _on_report_consent(city: City, message: Message, chat: list[Message]) -> None:
+    agent = city.agent_id
+    booking_id = ""
+    for row in chat:
+        if row.sender == agent and first_word(row.text) == "consent" and _CONSENT_ASK in row.text.split():
+            booking_id = fields_of(row.text).get("booking_id", "")
+    if not booking_id:
+        return
+    body = understood(message).body
+    fields = fields_of(message.text)
+    consent_ref = fields.get("consent_ref") or body.get("consent_ref")
+    purpose = fields.get("purpose") or body.get("purpose")
+    if not isinstance(consent_ref, str):
+        consent_ref = ""
+    if consent_ref and purpose != "report_sharing" and not consent_ref.endswith("report_sharing"):
+        # A consent for another purpose (booking, cross_asst...) is not an answer to our question.
+        return
+    command = f"report booking_id={booking_id} outcome_code=VISIT"
+    if consent_ref:
+        command += f" consent_ref={consent_ref}"
+    # No consent_ref in the answer = refusal in plain words: archive the report without sharing.
+    if not await _say(city, LEDGER, command):
+        return
+    token = f"booking_id={booking_id}"
     found = await _await_line(city, message.need_id, chat, "reported", token, op="report")
     if found is None:
         _LOG.info("care.report.missing", extra={"need_id": (message.need_id or "")[:48]})
