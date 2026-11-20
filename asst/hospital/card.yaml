@@ -1,6 +1,5 @@
 agent_id: agent:kns1ve6wnncw
-# Per le prove locali. Impostare la squadra assegnata prima del rilascio.
-team: team:local-dev
+team: team:p4radigm
 name: hospital
 version: 1.0.0
 cap_versions:

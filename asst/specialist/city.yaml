@@ -1,4 +1,3 @@
 agent: specialist
-# Per le prove locali. Impostare la squadra assegnata prima del rilascio.
-team: local-dev
+team: p4radigm
 role: facility
