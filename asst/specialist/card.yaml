@@ -1,7 +1,7 @@
-agent_id: agent:gsneva6tkmw5
+agent_id: agent:sh35cbsy287d
 team: team:p4radigm
 name: specialist
-version: 1.0.0
+version: 1.0.1
 cap_versions:
   - "1.0"
 profiles:
@@ -11,4 +11,4 @@ capabilities:
   - specialist_care.cardiology
 no_clinical_advice: true
 endpoints:
-  mailbox: agent:gsneva6tkmw5
+  mailbox: agent:sh35cbsy287d

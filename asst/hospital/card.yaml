@@ -1,4 +1,4 @@
-agent_id: agent:kns1ve6wnncw
+agent_id: agent:bb01ggxymm05
 team: team:p4radigm
 name: hospital
 version: 1.0.0
@@ -11,4 +11,4 @@ capabilities:
   - hospital.physiatry
 no_clinical_advice: true
 endpoints:
-  mailbox: agent:kns1ve6wnncw
+  mailbox: agent:bb01ggxymm05
