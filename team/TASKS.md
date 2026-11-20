@@ -10,9 +10,10 @@ Aggiorna la tua riga quando cambi stato. Un compito tocca solo i file indicati.
 | GP e specialist: red flag del world, DUPLICATE, ledger_ref, referto unico | Ismail | `asst/gp/`, `asst/specialist/` | specialist online; GP da pubblicare | PR #10 | 23:30 |
 | Ridurre hospital/consultorio al solo codice dei due ruoli (`tools/riduci_agente.py` + confronto) | Alberto | `asst/hospital/`, `asst/family_counseling/` | da fare | — | prima del prossimo deploy |
 | Specialist: consenso `report_sharing` + messaggi cortesi | Ismail | `asst/specialist/` | online 1.0.2 (22:34) | PR #6, #7, #10 | fatto |
-| CUP: ricerca cross-ASST con `city.find` e consenso `cross_asst` | Abed | `asst/booking_centre/` | unito su main con la correzione degli id medico, da pubblicare 23:30-00:00 | PR #8 | 00:00 (L4) |
-| CUP: parser del consenso con testo prima dell'atto, slot partner ritirato durante il consenso | Abed | `asst/booking_centre/` | da fare | — | 00:00 (L4) |
-| CUP: rinnovo P1 (`PRESCRIPTION_EXPIRED` → GP) e lettura `rules` | Abed | `asst/booking_centre/` | da fare | — | prima di L8 |
+| CUP: ricerca cross-ASST con `city.find` e consenso `cross_asst` | Abed | `asst/booking_centre/` | online 1.0.1 dalle 22:47 secondo il passaggio di turno; da verificare in Arena | PR #8, #13 | 00:00 (L4) |
+| CUP: parser del consenso con testo prima dell'atto, slot partner ritirato durante il consenso | Abed | `asst/booking_centre/`, `tools/test_cup_recovery.py` | testato in locale, in revisione | `abed/cup-rinnovo-p1` | 00:00 (L4) |
+| CUP: rinnovo P1 (`PRESCRIPTION_EXPIRED` → GP) | Abed | `asst/booking_centre/`, `tools/test_cup_recovery.py` | testato in locale, in revisione | `abed/cup-rinnovo-p1` | prima di L8 |
+| CUP: lettura preventiva di `rules` | Abed | `asst/booking_centre/` | da verificare con il formato del Ledger in Arena | — | prima di L8 |
 | Collegamento LLM (Gemma) su GitHub | Abed | il suo agente | da pushare | — | subito |
 | Ospedale e consultorio: formato ID nel controllo P2, mai inventare il consent_ref, non riproporre lo slot annullato | Alberto | `asst/hospital/`, `asst/family_counseling/` | da fare | — | prima di L4 |
 | Ospedale e consultorio: verifica in console, ospedale giù | Alberto | `asst/hospital/`, `asst/family_counseling/`, `tools/` | dall'1:00 | — | — |

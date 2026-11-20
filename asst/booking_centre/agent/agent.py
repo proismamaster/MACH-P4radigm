@@ -261,14 +261,6 @@ def _exact(chat: list[Message], agent: str, text: str) -> bool:
     return any(row.sender == agent and row.text.strip() == text for row in chat)
 
 
-async def _say(city: City, to: str, text: str) -> bool:
-    try:
-        await city.say(to, text)
-    except CapError:
-        return False
-    return True
-
-
 async def _until(
     city: City,
     need_id: str | None,
@@ -296,11 +288,6 @@ async def _until(
 def _has_agenda(chat: list[Message]) -> bool:
     agenda = _ledger(chat, "agenda")
     return _when("" if agenda is None else agenda.get("agenda_now", "")) is not None
-
-
-def _has_procedure(chat: list[Message]) -> bool:
-    reply = _ledger(chat, "prescription")
-    return reply is not None and bool(reply.get("procedure"))
 
 
 def _doctor_spec(doctor_id: str) -> tuple[frozenset[str], str, frozenset[str]] | None:
@@ -434,6 +421,8 @@ def _withdrawn(chat: list[Message], agent: str) -> set[str]:
     """Slots we cancelled. The citizen drops the rest, so those are offered again."""
 
     by_offer: dict[str, str] = {}
+    confirmed_slots: dict[str, str] = {}
+    dropped: set[str] = set()
     for row in chat:
         if row.sender != agent:
             continue
@@ -441,22 +430,57 @@ def _withdrawn(chat: list[Message], agent: str) -> set[str]:
             offer_id = offer["offer_id"]
             if slot := offer.get("slot_id"):
                 by_offer[offer_id] = slot
-    dropped: set[str] = set()
-    for row in chat:
-        if row.sender != agent or first_word(row.text) != "cancel":
-            continue
-        slot = by_offer.get(fields_of(row.text).get("offer_id", ""))
+        act = first_word(row.text)
+        fields = fields_of(row.text)
+        number = fields.get("prescription_number", "")
+        if act == "confirm" and number and (slot := fields.get("slot_id")):
+            confirmed_slots[number] = slot
+        slot = None
+        if act == "cancel":
+            slot = by_offer.get(fields.get("offer_id", ""))
+        elif act == "data.request" and fields.get("purpose") == "prescription_renewal":
+            slot = confirmed_slots.get(number)
         if slot:
             dropped.add(slot)
     return dropped
 
 
-def _number(chat: list[Message]) -> str | None:
+def _cup_number(chat: list[Message], citizen: str, expired: set[str]) -> str | None:
+    current = None
+    seen_expired = set()
+    for row in chat:
+        if row.sender != citizen:
+            continue
+        act, fields = _cup_input(row)
+        if act in {"confirm", "consent", "cancel", "booking.receipt", "refused"}:
+            continue
+        if act == "data.response" and fields.get("purpose") not in (None, "prescription_renewal"):
+            continue
+        number = fields.get("prescription_number", "")
+        if not _CUP_TOKEN.fullmatch(number):
+            continue
+        if number not in expired:
+            current = number
+        elif number not in seen_expired:
+            # An expired reference superseded earlier intake. Later replays cannot replace a renewal.
+            current = None
+            seen_expired.add(number)
+    return current
+
+
+def _cup_prescription(chat: list[Message], number: str | None, citizen: str) -> dict[str, str] | None:
     for row in reversed(chat):
-        if row.sender.startswith("citizen:"):
-            number = fields_of(row.text).get("prescription_number")
-            if number:
-                return number
+        if row.sender != LEDGER:
+            continue
+        act, fields = _cup_input(row)
+        if fields.get("prescription_number") != number or not number:
+            continue
+        if any(fields.get(key, citizen) != citizen for key in ("citizen", "patient")):
+            continue
+        if act == "prescription":
+            return fields
+        if act == "refused" and fields.get("code") == "PRESCRIPTION_EXPIRED":
+            return {**fields, "state": "expired"}
     return None
 
 
@@ -593,6 +617,8 @@ class _CupCase:
     cross_consent_request: Message | None = None
     confirmation: Message | None = None
     cancellation: Message | None = None
+    renewal_request: Message | None = None
+    expired_prescriptions: set[str] = field(default_factory=set)
     booked: bool = False
 
 
@@ -613,11 +639,20 @@ def _cup_case(chat: list[Message], agent: str, citizen: str) -> _CupCase:
                     state.cross_consent_request = None
                 state.offers.update({offer["offer_id"]: offer for offer in offers})
                 state.cancellation = None
+                state.renewal_request = None
             elif act == "cancel":
                 state.offers.clear()
                 state.cross_consent_request = None
                 state.confirmation = None
                 state.cancellation = row
+            elif act == "data.request" and fields.get("purpose") == "prescription_renewal":
+                if number := fields.get("prescription_number"):
+                    state.expired_prescriptions.add(number)
+                    state.offers.clear()
+                    state.cross_consent_request = None
+                    state.confirmation = None
+                    state.cancellation = None
+                    state.renewal_request = row
             elif act == "consent" and fields.get("purpose") == "cross_asst":
                 state.cross_consent_request = row
             elif act == "booking.receipt" and fields.get("booking_id") and fields.get("ledger_ref"):
@@ -633,7 +668,7 @@ def _cup_input(message: Message) -> tuple[str, dict[str, str]]:
             key: value for key, value in message.body.items()
             if isinstance(value, str) and value and not any(char.isspace() for char in value)
         }
-    acts = words(message.text) & {"confirm", "booking.receipt", "cancel"}
+    acts = words(message.text) & {"confirm", "booking.receipt", "cancel", "consent", "data.response", "refused"}
     if len(acts) > 1:
         return "", {}
     act = next(iter(acts), first_word(message.text))
@@ -681,6 +716,8 @@ async def _booking_centre(city: City, message: Message, chat: list[Message]) -> 
         return
     key = message.need_id
     cache = _sent(key)
+    if not any(row.msg_id == message.msg_id for row in chat):
+        chat = [*chat, message]
     chat = _cup_history(chat, cache, city.agent_id, key)
     citizen = next((row.sender for row in chat if row.sender.startswith("citizen:")), None)
     if citizen is None:
@@ -691,6 +728,15 @@ async def _booking_centre(city: City, message: Message, chat: list[Message]) -> 
         return
     act, fields = _cup_input(message)
     pending = state.confirmation
+    number = _cup_number(chat, citizen, state.expired_prescriptions)
+    if pending is not None:
+        number = fields_of(pending.text).get("prescription_number")
+    if number and (pending is None or message.sender == LEDGER):
+        reply = _cup_prescription(chat if pending is None else [message], number, citizen)
+        if reply is not None and reply.get("state") == "expired":
+            await _cup_request_renewal(city, message, cache, citizen, number)
+            return
+
     if pending is not None:
         received_at = _when(message.sent_at)
         sent_at = _when(pending.sent_at)
@@ -708,12 +754,21 @@ async def _booking_centre(city: City, message: Message, chat: list[Message]) -> 
                 await _cup_send(city, message, cache, citizen, receipt)
         elif act == "cancel" and fields.get("offer_id") == choice.get("offer_id"):
             citizen_offer = choice.get("cup_offer_id", choice["offer_id"])
-            await _cup_cancel(
-                city, message, chat, cache, citizen,
-                f"cancel offer_id={citizen_offer} reason=facility_cancelled",
-            )
+            if fields.get("reason") == "PRESCRIPTION_EXPIRED" and number:
+                await _cup_request_renewal(city, message, cache, citizen, number)
+            else:
+                await _cup_cancel(
+                    city, message, chat, cache, citizen,
+                    f"cancel offer_id={citizen_offer} reason=facility_cancelled",
+                )
         return
 
+    if offer_id := _cup_withdrawal(chat, state.offers):
+        await _cup_cancel(
+            city, message, chat, cache, citizen,
+            f"cancel offer_id={offer_id} reason=facility_cancelled La struttura ha ritirato questo orario.",
+        )
+        return
     if message.sender == citizen and state.cross_consent_request is not None:
         await _cup_cross_consent(city, message, chat, cache, state, citizen, act, fields)
         return
@@ -725,9 +780,9 @@ async def _booking_centre(city: City, message: Message, chat: list[Message]) -> 
         message.sender in {citizen, LEDGER}
         or (act in {"offer", "cancel"} and message.sender in _cup_searches(chat, city.agent_id))
     ):
-        trigger = state.cancellation or message
+        replacement = state.cancellation or state.renewal_request
         await _advance_alone(
-            city, trigger, chat, key, fixed=None, replacing=state.cancellation is not None, bundle=True,
+            city, replacement or message, chat, key, replacing=replacement is not None,
         )
 
 
@@ -800,7 +855,7 @@ async def _cup_cross_consent(
     offer_id = fields_of(ask.text).get("offer_id", "")
     if offer_id not in state.offers or fields.get("offer_id", offer_id) != offer_id:
         return
-    if act == "confirm":
+    if act in {"", "confirm"}:
         return  # The original booking confirmation may be delivered again.
     if fields.get("purpose") not in (None, "cross_asst"):
         return
@@ -817,6 +872,20 @@ async def _cup_cross_consent(
         )
 
 
+async def _cup_request_renewal(
+    city: City, message: Message, cache: _Sent, citizen: str, number: str,
+) -> None:
+    if not _CUP_TOKEN.fullmatch(number):
+        return
+    text = (
+        "data.request purpose=prescription_renewal fields=prescription_number "
+        f"prescription_number={number} La ricetta è scaduta. Chiedi al medico di base di rinnovarla "
+        "e mandami il nuovo numero per riprendere la prenotazione."
+    )
+    if await _cup_send(city, message, cache, citizen, text):
+        cache.uncertain_confirmation = False
+
+
 async def _cup_cancel(
     city: City, message: Message, chat: list[Message], cache: _Sent, citizen: str, notice: str
 ) -> None:
@@ -825,7 +894,7 @@ async def _cup_cancel(
         cancellation = cache.outbox[-1]
         await _advance_alone(
             city, cancellation, [*chat, cancellation], message.need_id or message.msg_id,
-            fixed=None, replacing=True, bundle=True,
+            replacing=True,
         )
 
 
@@ -852,6 +921,27 @@ def _cup_local_facilities(chat: list[Message]) -> set[str]:
     return facilities
 
 
+def _matches_partner_withdrawal(fields: dict[str, str], offer: dict[str, str]) -> bool:
+    identifiers = {"offer_id": "partner_offer_id", "slot_id": "slot_id", "request_id": "request_id"}
+    supplied = fields.keys() & identifiers.keys()
+    return bool(supplied) and all(fields[key] == offer.get(identifiers[key]) for key in supplied)
+
+
+def _cup_withdrawal(chat: list[Message], offers: dict[str, dict[str, str]]) -> str | None:
+    partners = {offer["facility"] for offer in offers.values() if "partner_offer_id" in offer}
+    for row in reversed(chat):
+        if row.sender not in partners:
+            continue
+        act, fields = _cup_input(row)
+        if act != "cancel":
+            continue
+        for offer_id, offer in offers.items():
+            if "partner_offer_id" in offer and row.sender == offer["facility"]:
+                if _matches_partner_withdrawal(fields, offer):
+                    return offer_id
+    return None
+
+
 def _cup_partner_slots(
     chat: list[Message], searches: dict[str, str], procedure: str, priority: str, now: datetime,
     citizen: str, taken: set[str],
@@ -868,15 +958,23 @@ def _cup_partner_slots(
         request_id = searches.get(row.sender)
         if not request_id:
             continue
+        act, fields = _cup_input(row)
+        if act == "cancel":
+            if fields.get("request_id", request_id) != request_id:
+                continue
+            if fields.get("request_id") and not ("offer_id" in fields or "slot_id" in fields):
+                answered.add(row.sender)
+            slots = {
+                key: slot for key, slot in slots.items()
+                if key[0] != row.sender or not _matches_partner_withdrawal(fields, slot)
+            }
+            continue
         for line in row.text.splitlines():
             act = first_word(line)
             fields = fields_of(line)
-            if act not in {"offer", "cancel"} or fields.get("request_id") != request_id:
+            if act != "offer" or fields.get("request_id") != request_id:
                 continue
             answered.add(row.sender)
-            if act == "cancel":
-                slots = {key: slot for key, slot in slots.items() if key[0] != row.sender}
-                continue
             offer_id, slot_id, doctor = (fields.get(key, "") for key in ("offer_id", "slot_id", "doctor_id"))
             if not all(_CUP_TOKEN.fullmatch(token) for token in (offer_id, slot_id, doctor)):
                 continue
@@ -994,58 +1092,52 @@ async def _advance_alone(
     chat: list[Message],
     key: str,
     *,
-    fixed: str | None,
     replacing: bool,
-    bundle: bool = False,
 ) -> None:
     agent = city.agent_id
     citizen = _citizen(chat)
     if citizen is None:
         return
-    reply = _ledger(chat, "prescription")
-    priority = None if reply is None else reply.get("priority")
-    procedure = fixed or (None if reply is None else reply.get("procedure"))
-    number = _number(chat)
-    agenda = _ledger(chat, "agenda")
-    now = _when("" if agenda is None else agenda.get("agenda_now", ""))
-    world = _latest_slots(chat)
+    sent = _sent(key)
+    case = _cup_case(chat, agent, citizen)
+    number = _cup_number(chat, citizen, case.expired_prescriptions)
     # Ask, then read the reply from history: the push of a ledger message does not open a turn.
     for _pass in range(3):
-        reply = _ledger(chat, "prescription")
+        reply = _cup_prescription(chat, number, citizen)
+        state = None if reply is None else reply.get("state")
+        if state == "expired" and number:
+            await _cup_request_renewal(city, message, sent, citizen, number)
+            return
+        if state not in (None, "issued"):
+            return
         priority = None if reply is None else reply.get("priority")
         if priority == "P":
             offer_id = f"wl-{message.need_id or message.msg_id}"
             token = f"offer_id={offer_id}"
-            sent = _sent(key)
             if offer_id in sent.offers:
                 return
             if not _we(chat, agent, token, to=citizen, word="offer"):
-                if await _say(city, citizen, f"offer offer_id={offer_id} waiting_list=true"):
+                if await _cup_send(city, message, sent, citizen, f"offer offer_id={offer_id} waiting_list=true"):
                     sent.offers.add(offer_id)
             return
-        procedure = fixed or (None if reply is None else reply.get("procedure"))
-        number = _number(chat)
-        if fixed is None and number and not procedure:
+        procedure = None if reply is None else reply.get("procedure")
+        if number and reply is None:
             if _pass == 2:
                 return
-            if not any(
-                row.sender == agent and f"prescription_number={number}" in row.text.split()
-                for row in chat
-            ):
-                await _say(city, LEDGER, f"prescription prescription_number={number}")
+            lookup = f"prescription prescription_number={number}"
+            if not any(row.sender == agent and row.recipient == LEDGER and row.text == lookup for row in chat):
+                await _cup_send(city, message, sent, LEDGER, lookup)
             if not _exact(chat, agent, "agenda"):
-                await _say(city, LEDGER, "agenda")
+                await _cup_send(city, message, sent, LEDGER, "agenda")
             chat = await _until(
                 city,
                 message.need_id,
                 chat,
-                lambda rows: _has_procedure(rows) and _has_agenda(rows),
+                lambda rows: _cup_prescription(rows, number, citizen) is not None,
             )
+            chat = _cup_history(chat, sent, agent, key)
             continue
         if not procedure:
-            return
-        state = None if reply is None else reply.get("state")
-        if fixed is None and state not in (None, "issued"):
             return
         agenda = _ledger(chat, "agenda")
         now = _when("" if agenda is None else agenda.get("agenda_now", ""))
@@ -1055,22 +1147,22 @@ async def _advance_alone(
         if _pass == 2:
             return
         if now is None and not _exact(chat, agent, "agenda"):
-            await _say(city, LEDGER, "agenda")
+            await _cup_send(city, message, sent, LEDGER, "agenda")
         if world is None and not _asked(chat, agent, procedure, 1):
-            await _say(city, LEDGER, f"world procedure={procedure} page=1")
+            await _cup_send(city, message, sent, LEDGER, f"world procedure={procedure} page=1")
         chat = await _until(
             city,
             message.need_id,
             chat,
             lambda rows: _has_agenda(rows) and _latest_slots(rows) is not None,
         )
+        chat = _cup_history(chat, sent, agent, key)
     else:
         return
     if now is None or world is None:
         return
     # A cancel drops every offer the citizen was holding, so the ones still free are sent again,
     # once per cancel: a second turn for the same cancel or refusal does not repeat them.
-    sent = _sent(key)
     if replacing:
         trigger = fields_of(message.text).get("offer_id") or message.msg_id
         if sent.trigger != trigger:
@@ -1087,43 +1179,34 @@ async def _advance_alone(
             priority=priority,
             lang=_lang(chat),
             gender=_gender(chat),
-            facility=agent if fixed == "CONS-GIN" else None,
             procedure=procedure,
         )
         if slot.get("slot_id") not in taken
     ]
-    if bundle:
-        days = _cup_days(chat, citizen)
-        unavailable = {
-            fields_of(row.text).get("facility")
-            for row in chat
-            if row.sender == agent and first_word(row.text) == "cancel"
-            and "reason=facility_unavailable" in row.text.split()
-        }
-        chosen = [
-            slot for slot in chosen
-            if slot.get("facility", "").startswith("agent:") and slot["facility"] != agent
-            and slot["facility"] not in unavailable
-            and (not days or slot.get("day") in days)
-        ]
-    if chosen and bundle:
-        await _cup_offer_batch(city, message, sent, citizen, chosen, number, priority, replacing=replacing)
-        return
+    days = _cup_days(chat, citizen)
+    unavailable = {
+        fields_of(row.text).get("facility")
+        for row in chat
+        if row.sender == agent and first_word(row.text) == "cancel"
+        and "reason=facility_unavailable" in row.text.split()
+    }
+    chosen = [
+        slot for slot in chosen
+        if slot.get("facility", "").startswith("agent:") and slot["facility"] != agent
+        and slot["facility"] not in unavailable
+        and (not days or slot.get("day") in days)
+    ]
     if chosen:
-        for slot in chosen[:3]:
-            if await _say(city, citizen, _offer_line(slot, number, priority)):
-                sent.offers.add(slot["slot_id"])
-                if replacing:
-                    sent.again.add(slot["slot_id"])
+        await _cup_offer_batch(city, message, sent, citizen, chosen, number, priority, replacing=replacing)
         return
     if taken and not replacing:
         return
     page, pages = _page(world)
     if page < pages and page < _MAX_PAGE:
         if not _asked(chat, agent, procedure, page + 1):
-            await _say(city, LEDGER, f"world procedure={procedure} page={page + 1}")
+            await _cup_send(city, message, sent, LEDGER, f"world procedure={procedure} page={page + 1}")
         return
-    if bundle and number and procedure in _CUP_SERVICES and priority in {"U", "B", "D"}:
+    if number and procedure in _CUP_SERVICES and priority in {"U", "B", "D"}:
         await _cup_cross_asst(
             city, message, chat, sent, citizen, procedure, priority, now, number, taken, replacing=replacing,
         )
