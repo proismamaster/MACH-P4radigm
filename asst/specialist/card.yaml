@@ -1,6 +1,5 @@
 agent_id: agent:gsneva6tkmw5
-# Per le prove locali. Impostare la squadra assegnata prima del rilascio.
-team: team:local-dev
+team: team:p4radigm
 name: specialist
 version: 1.0.0
 cap_versions:
