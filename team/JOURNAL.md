@@ -1,5 +1,18 @@
 # Journal (la voce più recente in alto)
 
+## 2026-11-20 22:53 — Abed — Rinnovo P1 e disponibilità cross-ASST del CUP
+
+**Fatto**
+- Il CUP chiede al cittadino di rinnovare la ricetta scaduta con il GP e riprende la ricerca solo quando il Ledger verifica il nuovo numero.
+- Il CUP riconosce il consenso cross-ASST dopo una frase e ritira lo slot annullato dal partner prima di inoltrare una conferma.
+- Cinque regressioni falliscono sul codice precedente alla PR e passano con la correzione. Verificate anche le suite di squadra e la card del CUP.
+
+**Problemi**
+- Lo specialist inoltra la scadenza come cancellazione generica. Il CUP può riconoscere quel caso se il Ledger gli consegna una risposta abbinabile alla ricetta.
+
+**Prossimo passo**
+- Rileggere la PR. In Arena verificare prima un percorso cross-ASST e poi il rinnovo P1 fino alla ricevuta.
+
 ## 2026-11-20 22:36 — Ismail — Specialist online, file ridotti
 
 **Fatto**
