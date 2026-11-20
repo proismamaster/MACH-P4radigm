@@ -357,10 +357,20 @@ def _rx(need_id: str | None, msg_id: str) -> str:
     return number if _RX.fullmatch(number) else "prescription_number-CASE"
 
 
+def _doctor_spec(doctor_id: str) -> tuple[frozenset[str], str, frozenset[str]] | None:
+    return _DOCTORS.get(doctor_id) or _DOCTORS.get(doctor_id.rsplit("-", 1)[-1])
+
+
+def _unknown_doctor_ok(lang: str, gender: str | None) -> bool:
+    # The live world may use doctor ids that are not in the hand-written table (the kit
+    # example uses D-3). Keep such a slot unless the citizen needs something we cannot check.
+    return lang in {"it", "en", ""} and not gender
+
+
 def _speaks(doctor_id: str, lang: str) -> bool:
-    spec = _DOCTORS.get(doctor_id.rsplit("-", 1)[-1])
+    spec = _doctor_spec(doctor_id)
     if spec is None:
-        return False
+        return _unknown_doctor_ok(lang, None)
     langs = spec[0]
     if lang in langs:
         return True
@@ -408,8 +418,10 @@ def fitting(
             continue
         if not _speaks(doctor, lang):
             continue
-        spec = _DOCTORS.get(doctor.rsplit("-", 1)[-1])
+        spec = _doctor_spec(doctor)
         if spec is None:
+            if _unknown_doctor_ok(lang, gender):
+                chosen.append((at, slot))
             continue
         day = slot.get("day", "")
         if day and day not in spec[2]:
@@ -1036,8 +1048,11 @@ def _cup_partner_slots(
                 continue
             # The common doctor template has stable Italian/English and gender entries.
             # A rare language belongs to a specific ASST, so a wildcard is not evidence here.
-            spec = _DOCTORS.get(doctor.rsplit("-", 1)[-1])
-            if spec is None or language not in spec[0] or (gender and gender != spec[1]) or day not in spec[2]:
+            spec = _doctor_spec(doctor)
+            if spec is None:
+                if not _unknown_doctor_ok(language, gender):
+                    continue
+            elif language not in spec[0] or (gender and gender != spec[1]) or day not in spec[2]:
                 continue
             slots[row.sender, slot_id] = {
                 "slot_id": slot_id, "doctor_id": doctor, "facility": row.sender,
