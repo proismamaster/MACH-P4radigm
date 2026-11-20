@@ -738,7 +738,7 @@ async def _on_confirm(
         if message.sender.startswith("agent:") and _other_asst(message.sender, agent):
             # Rule P2: a hold in another ASST needs the cross_asst consent first. The booking
             # centre sends it as cross_consent_ref= (team contract; the kit has one consent_ref).
-            cross = fields.get("cross_consent_ref", "")
+            cross = fields.get("cross_consent_ref") or fields.get("cross_asst_consent_ref", "")
             if cross:
                 hold_consent = cross
             elif _rule_on(chat, "P2"):
@@ -1371,6 +1371,21 @@ def _facility_slots(
     return [slot for _, slot in chosen], reserved
 
 
+# Our doctors, from the world registry (asst-bicocca). Sent as doctor_lang / doctor_gender in the
+# level-4 common format, so other booking centres can pick the doctor who speaks the language.
+_OUR_DOCTORS = {
+    "asst-bicocca-h1": ("it/en", "f"), "asst-bicocca-h2": ("it", "m"),
+    "asst-bicocca-h3": ("it/ti", "m"), "asst-bicocca-c1": ("it/en", "f"),
+}
+
+
+def _doctor_fits(slot: dict[str, str], lang: str, gender: str) -> bool:
+    known = _OUR_DOCTORS.get(slot.get("doctor_id", ""))
+    if known is None:
+        return lang in {"", "it"} and not gender
+    return (not lang or lang in known[0].split("/")) and (not gender or gender == known[1])
+
+
 def _partner_offer(slot: dict[str, str], me: str, priority: str | None, request_id: str) -> str:
     at = slot.get("at") or slot.get("agenda_date", "")
     day = slot.get("day") or slot.get("agenda_day", "")
@@ -1388,6 +1403,8 @@ def _partner_offer(slot: dict[str, str], me: str, priority: str | None, request_
     ]
     if day:
         parts.append(f"agenda_day={day}")
+    if known := _OUR_DOCTORS.get(slot.get("doctor_id", "")):
+        parts += [f"doctor_lang={known[0]}", f"doctor_gender={known[1]}"]
     parts += [f"expiry={at}", f"request_id={request_id}"]
     if priority:
         parts.append(f"priority={priority}")
@@ -1447,6 +1464,9 @@ async def _answer_search(
     slots, reserved = _facility_slots(
         lines, now=now, priority=priority, procedure=procedure, me=agent
     )
+    want_lang = fields.get("lang", "")
+    want_gender = fields.get("gender_preference") or fields.get("gender") or ""
+    slots = [slot for slot in slots if _doctor_fits(slot, want_lang, want_gender)]
     if slots:
         offers = [_partner_offer(slot, agent, priority, rid) for slot in slots[:3]]
         await reply("\n".join(offers))
