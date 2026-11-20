@@ -7,8 +7,9 @@ Aggiorna la tua riga quando cambi stato. Un compito tocca solo i file indicati.
 | GP: sintomi in testo libero + ricetta dopo `prescribed` | Ismail | `asst/gp/` | online 1.0.2 (22:03) | PR #6 | fatto |
 | GP: messaggi cortesi con passo successivo (review proattività) | Ismail | `asst/gp/` | unito, da pubblicare | PR #7 | prossima finestra |
 | Specialist: follow-up (`prescribe ... follow_up_of=`) | Ismail | `asst/specialist/` | da fare | — | — |
-| GP e specialist: red flag del world, DUPLICATE, ledger_ref, referto unico | Ismail | `asst/gp/`, `asst/specialist/` | fatto, da pubblicare | PR #10 | 23:00 |
-| Specialist: consenso `report_sharing` + messaggi cortesi | Ismail | `asst/specialist/` | deploy 1.0.1 in corso (primo tentativo fallito per la piattaforma) | PR #6, #7 | 23:00 (L3) |
+| GP e specialist: red flag del world, DUPLICATE, ledger_ref, referto unico | Ismail | `asst/gp/`, `asst/specialist/` | specialist online; GP da pubblicare | PR #10 | 23:30 |
+| Ridurre hospital/consultorio al solo codice dei due ruoli (`tools/riduci_agente.py` + confronto) | Alberto | `asst/hospital/`, `asst/family_counseling/` | da fare | — | prima del prossimo deploy |
+| Specialist: consenso `report_sharing` + messaggi cortesi | Ismail | `asst/specialist/` | online 1.0.2 (22:34) | PR #6, #7, #10 | fatto |
 | CUP: ricerca cross-ASST con `city.find` e consenso `cross_asst` | Abed | `asst/booking_centre/` | unito su main con la correzione degli id medico, da pubblicare 23:30-00:00 | PR #8 | 00:00 (L4) |
 | CUP: parser del consenso con testo prima dell'atto, slot partner ritirato durante il consenso | Abed | `asst/booking_centre/` | da fare | — | 00:00 (L4) |
 | CUP: rinnovo P1 (`PRESCRIPTION_EXPIRED` → GP) e lettura `rules` | Abed | `asst/booking_centre/` | da fare | — | prima di L8 |
