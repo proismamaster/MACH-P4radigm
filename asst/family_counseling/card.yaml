@@ -1,4 +1,4 @@
-agent_id: agent:hj99vh8pj0r2
+agent_id: agent:nkh372rd16yq
 team: team:p4radigm
 name: family_counseling
 version: 1.0.0
@@ -11,4 +11,4 @@ capabilities:
   - family_counseling.gynecology
 no_clinical_advice: true
 endpoints:
-  mailbox: agent:hj99vh8pj0r2
+  mailbox: agent:nkh372rd16yq
