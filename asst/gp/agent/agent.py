@@ -42,12 +42,6 @@ _PROTOCOLS: dict[str, tuple[str, str]] = {
     "SYM-PALPITATIONS": ("VIS-CARD", "B"),
     "SYM-FOLLOWUP": ("VIS-CARD", "P"),
 }
-_GP_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("SYM-BACK", ("mal di schiena", "male alla schiena", "dolore alla schiena", "back pain")),
-    ("SYM-KNEE", ("ginocchio", "knee")),
-    ("SYM-PALPITATIONS", ("cuore che batte", "palpitazion", "batticuore", "heart racing", "palpitation")),
-    ("SYM-FOLLOWUP", ("controllo del cuore", "routine heart check")),
-)
 _RED_FLAGS = (
     "perdita di forza alle gambe",
     "loss of strength in the legs",
@@ -58,6 +52,16 @@ _DEADLINE_DAYS = {"B": 2, "D": 5}
 _GP_FIELD = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}")
 _GP_PRIORITIES = frozenset({"U", "B", "D", "P"})
 _GP_CLARIFICATION = "Mi descrivi meglio il disturbo per cui chiedi aiuto?"
+# Free text -> protocol symptom code. Only a lookup into the protocol table: no diagnosis.
+_GP_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("SYM-FOLLOWUP", ("controllo del cuore", "visita di controllo", "follow-up", "follow up",
+                      "routine heart check", "heart check-up", "heart checkup")),
+    ("SYM-PALPITATIONS", ("palpitazion", "batticuore", "cuore che batte", "cuore batte",
+                          "tachicardi", "palpitation", "heart racing", "racing heart")),
+    ("SYM-KNEE", ("ginocchio", "ginocchia", "knee")),
+    ("SYM-BACK", ("mal di schiena", "dolore alla schiena", "schiena", "lombar", "back pain",
+                  "lower back", "backache")),
+)
 _LOG = logging.getLogger("care")
 # The Relay accepts a ledger reply and then the agent rejects the push, so the reply sits in
 # the case history and never opens a turn. Wait briefly and read it back from history.
@@ -432,10 +436,8 @@ def _gp_case(chat: list[Message], inbound: Message) -> list[Message]:
     sent_ids = {row.msg_id for row in outgoing}
     rows = [row for row in chat if row.msg_id not in sent_ids]
     rows.extend(actual.get(row.msg_id, row) for row in outgoing)
-    return [
-        row for row in rows if row.need_id == inbound.need_id
-        and (not row.conversation_id or not inbound.conversation_id or row.conversation_id == inbound.conversation_id)
-    ]
+    # The case is the whole need: Ledger replies can arrive in their own conversation.
+    return [row for row in rows if row.need_id == inbound.need_id]
 
 
 async def _gp_send(city: City, inbound: Message, to: str, text: str) -> bool:
@@ -475,18 +477,19 @@ def _gp_request(chat: list[Message], citizen: str) -> tuple[str | None, str | No
         if latest_code is None and code and code.startswith("SYM-"):
             latest_code = code
     if latest_code is None:
-        # Citizens write free text ("mal di schiena", "cuore che batte"): fall back to keywords.
-        # Most recent message wins; two symptom families in one message stay unresolved.
-        for row in reversed(chat):
-            if row.sender != citizen:
-                continue
-            lowered = row.text.lower()
-            found = {name for name, phrases in _GP_KEYWORDS if any(p in lowered for p in phrases)}
-            if len(found) == 1:
-                return found.pop(), None
-            if found:
-                return None, None
+        latest_code = _gp_keyword_code(chat, citizen)
     return latest_code, None
+
+
+def _gp_keyword_code(chat: list[Message], citizen: str) -> str | None:
+    for row in reversed(chat):
+        if row.sender != citizen:
+            continue
+        lowered = (row.text or "").lower()
+        for code, phrases in _GP_KEYWORDS:
+            if any(phrase in lowered for phrase in phrases):
+                return code
+    return None
 
 
 def _gp_protocols(chat: list[Message]) -> dict[str, tuple[str, str]]:
@@ -615,7 +618,7 @@ async def _gp(city: City, message: Message, chat: list[Message], *, urgent: bool
         chat = await _until(
             city, message.need_id, chat,
             lambda rows: _gp_ledger_rx(rows, number, heads={"prescribed", "refused"}) is not None,
-            max_polls=8,
+            max_polls=24,
         )
         chat = _gp_case(chat, message)
 
@@ -627,33 +630,38 @@ async def _gp(city: City, message: Message, chat: list[Message], *, urgent: bool
 async def _gp_announce(
     city: City, message: Message, chat: list[Message], citizen: str, command: dict[str, str]
 ) -> None:
-    number = command["prescription_number"]
-    token = f"prescription_number={number}"
-    if _we(chat, city.agent_id, token, to=citizen, word="prescription"):
+    agent = city.agent_id
+    # One prescription per need: if any prescription already went to this citizen, stop.
+    if any(row.sender == agent and row.recipient == citizen and first_word(row.text) == "prescription"
+           for row in chat):
         return
+    number = command["prescription_number"]
     reply = _gp_ledger_rx(chat, number, heads={"prescribed", "refused"})
-    confirmed_by_lookup = False
-    if reply is not None and (reply.type == "refused" or first_word(reply.text) == "refused"):
+    if reply is None:
+        # The Ledger may answer with its own prescription_number: take its latest answer.
+        reply = next((row for row in reversed(chat) if row.sender == LEDGER
+                      and (first_word(row.text) if row.type == "chat" else row.type)
+                      in {"prescribed", "refused"}), None)
+    if reply is None:
+        # No Ledger confirmation yet: never announce a prescription the Ledger has not written.
+        # The Ledger reply (its own turn, or the citizen's next message) brings us back here.
+        return
+    if reply is not None:
         values = fields_of(reply.text) if reply.type == "chat" else reply.body
-        if values.get("code") != "DUPLICATE" and "DUPLICATE" not in reply.text.split():
+        act = first_word(reply.text) if reply.type == "chat" else reply.type
+        duplicate = values.get("code") == "DUPLICATE" or "DUPLICATE" in reply.text.split()
+        if act == "refused" and not duplicate:
             failure = "Il registro ha rifiutato la richiesta di ricetta."
-            if not any(
-                row.sender == city.agent_id and row.recipient == citizen and row.text == failure
-                for row in chat
-            ):
+            if not any(row.sender == agent and row.recipient == citizen and row.text == failure
+                       for row in chat):
                 await _gp_send(city, message, citizen, failure)
             return
-        reply = await _gp_lookup(city, message, chat, number)
-        confirmed_by_lookup = True
-    if reply is None:
-        return
-    values = fields_of(reply.text) if reply.type == "chat" else reply.body
-    expected = {"patient": citizen, "citizen": citizen, "procedure": command["procedure"], "priority": command["priority"]}
-    if any(key in values and values[key] != value for key, value in expected.items()):
-        return
-    if values.get("state", None if confirmed_by_lookup else "issued") != "issued":
-        return
-    notice = f"prescription {token} procedure={command['procedure']} priority={command['priority']}"
+        ledger_number = _gp_field(values.get("prescription_number"))
+        if act == "prescribed" and ledger_number:
+            number = ledger_number
+    notice = (f"prescription prescription_number={number} procedure={command['procedure']} "
+              f"priority={command['priority']}")
+    _LOG.info("gp need=%s announce %s", (message.need_id or "")[-12:], number)
     await _gp_send(city, message, citizen, notice)
 
 
@@ -687,7 +695,7 @@ async def _gp_select_protocol(
     if not _gp_world_received(chat):
         return None
     # The local SDK's world can explicitly answer with slots and no protocol table.
-    return (_gp_protocols(chat) or _PROTOCOLS).get(code)
+    return _gp_protocols(chat).get(code) or _PROTOCOLS.get(code)
 
 
 # --- centro prenotazioni and consultorio -------------------------------------------------------

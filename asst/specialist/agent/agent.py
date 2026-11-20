@@ -1169,8 +1169,15 @@ async def _on_report_consent(city: City, message: Message, chat: list[Message]) 
             booking_id = fields_of(row.text).get("booking_id", "")
     if not booking_id:
         return
-    body_ref = understood(message).body.get("consent_ref")
-    consent_ref = fields_of(message.text).get("consent_ref") or (body_ref if isinstance(body_ref, str) else "")
+    body = understood(message).body
+    fields = fields_of(message.text)
+    consent_ref = fields.get("consent_ref") or body.get("consent_ref")
+    purpose = fields.get("purpose") or body.get("purpose")
+    if not isinstance(consent_ref, str):
+        consent_ref = ""
+    if consent_ref and purpose != "report_sharing" and not consent_ref.endswith("report_sharing"):
+        # A consent for another purpose (booking, cross_asst...) is not an answer to our question.
+        return
     command = f"report booking_id={booking_id} outcome_code=VISIT"
     if consent_ref:
         command += f" consent_ref={consent_ref}"
