@@ -6,7 +6,18 @@ Questo è l'unico file di regole. `CLAUDE.md` e `AGENTS.md` rimandano qui. Vale 
 
 1. Leggi `team/PROJECT.md` (stato attuale, 1 minuto) e `team/TASKS.md` (chi fa cosa). Lavora SOLO sul tuo compito.
 2. Prima di toccare codice: `git fetch && git switch -c <nome>/<compito> origin/main`.
-3. Se il task è un bug: leggi `team/PROBLEMS.md` per non ripetere strade già provate. Se è una scelta tecnica: `team/DECISIONS.md`.
+3. Se il task è un bug: leggi `team/PROBLEMS.md` per non ripetere strade già provate. Se è una scelta tecnica: `team/DECISIONS.md`. Se riguarda un livello: `team/LIVELLI.md`.
+
+## Metodo (ogni modifica, nessuna eccezione)
+
+1. **Prova prima di credere.** Parti da un fatto: una riga della console (need_id e testo vero del cittadino), una regola di `docs-kit/e19-rules.md` o un test che fallisce. Mai correggere "a intuito".
+2. **Riproduci con un test** in `tools/` usando le frasi vere della console. Il test deve FALLIRE sul codice vecchio: se passa già, non hai trovato il bug.
+3. **Correggi il minimo** nel tuo agente. Non riscrivere ciò che funziona, non toccare i file degli altri.
+4. **Tutti i test verdi**: `tools/test_fix.py`, `tools/test_facility.py`, `tools/test_cup_medici.py` e il tuo. Poi `city card validate <agente>`.
+5. **PR** con: cosa cambia, perché (need_id o regola), test eseguiti. Un'altra persona o AI la rilegge.
+6. **Deploy** solo dopo il merge, un agente alla volta (sezione Deploy). Poi controlla `city --json status <agente>`: stasera i deploy finiscono anche `failed` per colpa della piattaforma e la versione può comparire dopo.
+7. **Verifica in console**: il percorso successivo deve mostrare il comportamento giusto. Solo allora è "fatto".
+8. **Scrivi cosa hai imparato**: bug in `team/PROBLEMS.md` (con causa), scelta in `team/DECISIONS.md` (con il perché), stato in `team/LIVELLI.md`.
 
 ## A fine sessione (obbligatorio)
 

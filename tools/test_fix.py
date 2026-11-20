@@ -102,6 +102,48 @@ async def main():
     await gp("Ciao! Ho mal di schiena da un po' di settimane, vorrei fare vedere.", "VIS-FIS")
     await gp("ciao doc, raga tipo il cuore che batte a mille ultimamente, lowkey vorrei un check", "VIS-CARD")
     await gp("Buongiorno dottore, ho un forte dolore al petto da stamattina", "escalate")
+    print("GP - red flag nascosta letta dalla tabella del world (livello 8)")
+    h = harness("gp", GP, role_card="gp")
+    base = World.answer
+
+    def world_with_flags(text, _w=h.world):
+        if text.startswith("world"):
+            return ("world page=1/1\nsymptom_code=SYM-BACK procedure=VIS-FIS priority=B "
+                    "red_flags=incontinenza|febbre_alta")
+        return base(_w, text)
+    h.world.answer = world_with_flags
+    await h.turn(CIT, "Ho mal di schiena da settimane e da ieri anche febbre alta")
+    check("escalation con red flag del world", len(h.out(CIT, "escalate.emergency")) == 1, h)
+    check("nessuna ricetta dopo la red flag", not h.out(CIT, "prescription") and not h.out("city:ledger", "prescribe"), h)
+    h = harness("gp", GP, role_card="gp")
+    h.world.answer = world_with_flags
+    await h.turn(CIT, "Ho mal di schiena da settimane")
+    check("senza red flag la ricetta parte normalmente", len(h.out(CIT, "prescription")) == 1, h)
+    print("GP - DUPLICATE: ricetta annunciata solo dopo averla riletta")
+    h = harness("gp", GP, role_card="gp")
+    def dup_world(text, _w=h.world):
+        if text.startswith("prescribe"):
+            n = text.split("prescription_number=")[1].split()[0]
+            return f"refused prescribe prescription_number={n} code=DUPLICATE"
+        if text.startswith("prescription "):
+            n = text.split("prescription_number=")[1].split()[0]
+            return f"prescription prescription_number={n} patient=citizen:altro procedure=VIS-FIS priority=B state=issued"
+        return World.answer(_w, text)
+    h.world.answer = dup_world
+    await h.turn(CIT, "Ho mal di schiena da settimane")
+    check("DUPLICATE di un altro paziente: nessuna ricetta annunciata", not h.out(CIT, "prescription"), h)
+    print("Specialist - due risposte al consenso: un solo referto, check-in con ledger_ref")
+    h = harness("specialist_care.cardiology", SPEC)
+    h.world.answer = lambda text, _w=h.world: (
+        "checked_in booking_id=BK-1 citizen=" + CIT + " ledger_ref=LR-9" if text.startswith("checkin")
+        else World.answer(_w, text))
+    await h.turn(CIT, "checkin booking_id=BK-1")
+    check("check-in al cittadino con ledger_ref", any("ledger_ref=LR-9" in t for t in h.out(CIT, "checkin")), h)
+    await asyncio.gather(
+        h.turn(CIT, "Va bene. consent consent_ref=cons-1 purpose=report_sharing"),
+        h.turn(CIT, "Sì confermo. consent consent_ref=cons-1 purpose=report_sharing"),
+    )
+    check("un solo referto al Ledger con risposte concorrenti", len(h.out("city:ledger", "report")) == 1, h)
     print("GP - Ledger muto: nessuna ricetta annunciata senza conferma")
     h = harness("gp", GP, role_card="gp")
     h.world.answer = lambda text: None if text.startswith("prescribe") else World.answer(h.world, text)
