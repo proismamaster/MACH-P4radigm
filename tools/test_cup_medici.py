@@ -100,5 +100,12 @@ check("rilassata: prima la finestra (h1 inglese il lunedi' dopo)", [g["slot_id"]
 got = cup._cup_relaxed(lines[1:], now=NOW, lang="en", gender=None, procedure="VIS-FIS")
 check("rilassata: poi la lingua (h2 italiano)", [g["slot_id"] for g in got] == ["S-2"])
 
+print("CUP - partner dell'anello (Discord) oltre a city.find")
+got = cup._cup_partner_candidates([], "hospital.physiatry", {"agent:noi"}, "ur")
+check("city.find vuoto: scrive comunque ai partner noti", len(got) == 6)
+check("prima il partner con l'h3 che parla la lingua (ur -> Nord)", got[0] == "agent:gpr1zqe343gb")
+got = cup._cup_partner_candidates(["agent:altro1", "agent:h6r1v45esk77"], "specialist_care.cardiology", {"agent:hnpe58epeyh1"}, "it")
+check("niente doppioni, mai le strutture locali, poi i risultati di find", got[5:] == ["agent:altro1", "agent:h6r1v45esk77"] and "agent:hnpe58epeyh1" not in got and len(got) == len(set(got)))
+
 print("FALLITE:", FAILS if FAILS else "nessuna")
 sys.exit(1 if FAILS else 0)
