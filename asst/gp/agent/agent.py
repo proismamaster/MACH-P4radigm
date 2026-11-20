@@ -51,7 +51,10 @@ _RED_FLAGS = (
 _DEADLINE_DAYS = {"B": 2, "D": 5}
 _GP_FIELD = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}")
 _GP_PRIORITIES = frozenset({"U", "B", "D", "P"})
-_GP_CLARIFICATION = "Mi descrivi meglio il disturbo per cui chiedi aiuto?"
+_GP_CLARIFICATION = (
+    "Grazie per avermi scritto, la aiuto volentieri. Per prepararle la ricetta giusta, "
+    "mi descrive in poche parole il disturbo (dove lo sente e da quanto tempo)?"
+)
 # Free text -> protocol symptom code. Only a lookup into the protocol table: no diagnosis.
 _GP_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("SYM-FOLLOWUP", ("controllo del cuore", "visita di controllo", "follow-up", "follow up",
@@ -651,7 +654,8 @@ async def _gp_announce(
         act = first_word(reply.text) if reply.type == "chat" else reply.type
         duplicate = values.get("code") == "DUPLICATE" or "DUPLICATE" in reply.text.split()
         if act == "refused" and not duplicate:
-            failure = "Il registro ha rifiutato la richiesta di ricetta."
+            failure = ("Mi dispiace, il registro non ha accettato la ricetta. "
+                       "Mi riscriva il disturbo e riprovo subito.")
             if not any(row.sender == agent and row.recipient == citizen and row.text == failure
                        for row in chat):
                 await _gp_send(city, message, citizen, failure)
@@ -660,7 +664,10 @@ async def _gp_announce(
         if act == "prescribed" and ledger_number:
             number = ledger_number
     notice = (f"prescription prescription_number={number} procedure={command['procedure']} "
-              f"priority={command['priority']}")
+              f"priority={command['priority']} "
+              "Grazie per avermi scritto. La ricetta è registrata: con questo numero può prenotare "
+              "la visita al centro prenotazioni (CUP). Indichi lingua, giorni e zona che preferisce, "
+              "così le propongono l'orario più comodo.")
     _LOG.info("gp need=%s announce %s", (message.need_id or "")[-12:], number)
     await _gp_send(city, message, citizen, notice)
 
