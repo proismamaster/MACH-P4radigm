@@ -82,5 +82,13 @@ slots, _ = cup._cup_partner_slots(partner_chat(rare.replace("doctor_lang=it/ka "
                                    {PARTNER: "rq-1"}, "VIS-FIS", "B", NOW, CIT, set())
 check("lingua rara senza doctor_lang: scartato (non verificabile)", slots == [])
 
+bad = common.replace("request_id=rq-1", "expiry=domani request_id=rq-1")
+slots, _ = cup._cup_partner_slots(partner_chat(bad), {PARTNER: "rq-1"}, "VIS-FIS", "B", NOW, CIT, set())
+check("expiry presente ma illeggibile: scartato", slots == [])
+lie = rare.replace("doctor_gender=m", "doctor_gender=f")
+slots, _ = cup._cup_partner_slots(partner_chat(lie, "need.request rx=prescription_number-X lang=ka gender_preference=f"),
+                                   {PARTNER: "rq-1"}, "VIS-FIS", "B", NOW, CIT, set())
+check("genere dichiarato contro la tabella (h3 e' m): scartato", slots == [])
+
 print("FALLITE:", FAILS if FAILS else "nessuna")
 sys.exit(1 if FAILS else 0)

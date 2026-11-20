@@ -828,7 +828,9 @@ async def _cup_confirm(
     )
     if partner_id:
         confirmation += (
-            f" cross_consent_ref={cross_ref} request_id={offer['request_id']} cup_offer_id={offer_id}"
+            # cross_asst_consent_ref is the name in the level-4 common format agreed between teams.
+            f" cross_consent_ref={cross_ref} cross_asst_consent_ref={cross_ref}"
+            f" request_id={offer['request_id']} cup_offer_id={offer_id}"
         )
     # If the send has no definite outcome, wait for history rather than sending a second confirm.
     cache.uncertain_confirmation = True
@@ -997,7 +999,8 @@ def _cup_partner_slots(
             at = _when(fields.get("agenda_date", ""))
             # The level-4 common format (agreed between teams) omits expiry and agenda_day:
             # the slot then expires at its own time and the day comes from the date.
-            expiry = _when(fields.get("expiry", "")) or at
+            raw_expiry = fields.get("expiry", "")
+            expiry = _when(raw_expiry) if raw_expiry else at  # present but unreadable: discarded below
             if at is None or expiry is None or expiry <= now or not earliest < at < horizon:
                 continue
             day = fields.get("agenda_day") or _AGENDA_WEEKDAYS[at.weekday()]
@@ -1006,16 +1009,22 @@ def _cup_partner_slots(
             # The common doctor template has stable Italian/English and gender entries.
             # A rare language belongs to a specific ASST, so a wildcard is not evidence here:
             # only the partner's own doctor_lang / doctor_gender can prove it.
+            # The table stays authoritative for gender, days and every language it names; the
+            # partner's doctor_lang only fills the table's "*" (or an unknown doctor).
             spec = _doctor_spec(doctor)
-            stated = set(re.split(r"[/,+]", fields.get("doctor_lang", ""))) - {""}
-            sex = fields.get("doctor_gender") or (spec[1] if spec else None)
-            if stated:
-                if language not in stated or (gender and gender != sex) or (spec and day not in spec[2]):
+            stated = set(re.split(r"[/,+]", fields.get("doctor_lang", ""))) - {"", "*"}
+            stated_sex = fields.get("doctor_gender")
+            if stated_sex not in {None, "m", "f"}:
+                continue
+            if spec is not None:
+                if (gender and gender != spec[1]) or day not in spec[2]:
                     continue
-            elif spec is None:
-                if not _unknown_doctor_ok(language, gender):
+                if language not in spec[0] and not ("*" in spec[0] and language in stated):
                     continue
-            elif language not in spec[0] or (gender and gender != spec[1]) or day not in spec[2]:
+            elif stated:
+                if language not in stated or (gender and gender != stated_sex):
+                    continue
+            elif not _unknown_doctor_ok(language, gender):
                 continue
             slots[row.sender, slot_id] = {
                 "slot_id": slot_id, "doctor_id": doctor, "facility": row.sender,
