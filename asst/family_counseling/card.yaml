@@ -1,0 +1,15 @@
+agent_id: agent:hj99vh8pj0r2
+# Per le prove locali. Impostare la squadra assegnata prima del rilascio.
+team: team:local-dev
+name: family_counseling
+version: 1.0.0
+cap_versions:
+  - "1.0"
+profiles:
+  - mhm/1.0
+role: facility
+capabilities:
+  - family_counseling.gynecology
+no_clinical_advice: true
+endpoints:
+  mailbox: agent:hj99vh8pj0r2
