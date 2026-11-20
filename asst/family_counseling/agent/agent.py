@@ -380,16 +380,17 @@ def fitting(
             continue
         if not earliest < at or (horizon is not None and at >= horizon):
             continue
-        if not _speaks(doctor, lang):
-            continue
         spec = _DOCTORS.get(doctor.rsplit("-", 1)[-1])
-        if spec is None:
-            continue
-        day = slot.get("day", "")
-        if day and day not in spec[2]:
-            continue
-        if gender and spec[1] != gender:
-            continue
+        # A doctor missing from the hand-written table is not dropped: the registry of the
+        # live world may use other ids. Language, days and gender are checked only when known.
+        if spec is not None:
+            if not _speaks(doctor, lang):
+                continue
+            day = slot.get("day", "")
+            if day and day not in spec[2]:
+                continue
+            if gender and spec[1] != gender:
+                continue
         chosen.append((at, slot))
     chosen.sort(key=lambda item: (item[0], item[1].get("slot_id", "")))
     return [slot for _, slot in chosen]
@@ -836,13 +837,28 @@ async def _on_confirm(
     number = fields.get("prescription_number") or offer.get("prescription_number")
     book_here = hold_self or message.sender.startswith("agent:") or facility == agent
     if book_here:
+        hold_consent = consent
+        if message.sender.startswith("agent:") and _other_asst(message.sender, agent):
+            # Rule P2: a hold in another ASST needs the cross_asst consent first. The booking
+            # centre sends it as cross_consent_ref= (team contract; the kit has one consent_ref).
+            cross = fields.get("cross_consent_ref", "")
+            if cross:
+                hold_consent = cross
+            elif _rule_on(chat, "P2"):
+                if not _we(chat, agent, f"slot_id={slot}", to=message.sender, word="cancel"):
+                    parts = ["cancel"]
+                    if offer_id:
+                        parts.append(f"offer_id={offer_id}")
+                    parts += [f"slot_id={slot}", "reason=consent_missing"]
+                    await _say(city, message.sender, " ".join(parts))
+                return
         if not _we(chat, agent, f"slot_id={slot}", to=LEDGER, word="hold"):
             parts = ["hold", f"slot_id={slot}"]
             if citizen:
                 parts.append(f"citizen={citizen}")
             if number:
                 parts.append(f"prescription_number={number}")
-            parts.append(f"consent_ref={consent}")
+            parts.append(f"consent_ref={hold_consent}")
             if not await _say(city, LEDGER, " ".join(parts)):
                 return
         await _finish_booking(city, message, chat, slot, hold_self=hold_self)
@@ -900,7 +916,7 @@ def _facility_turn(message: Message) -> bool:
     kind = words(message.text)
     if message.sender == LEDGER and head in {"held", "committed", "checked_in", "reported"}:
         return True
-    if message.sender == LEDGER and head == "refused" and "hold" in kind:
+    if message.sender == LEDGER and head == "refused" and kind & {"hold", "commit"}:
         return True
     if "checkin" in kind and message.sender.startswith("citizen:"):
         return True
@@ -910,8 +926,18 @@ def _facility_turn(message: Message) -> bool:
 
 
 async def _family(city: City, message: Message, chat: list[Message]) -> None:
+    agent = city.agent_id
+    if _is_search(message, agent):
+        await _on_search(city, message, chat)
+        return
     if _facility_turn(message):
         await _facility(city, message, chat, reports=False, hold_self=True)
+        return
+    # A case opened by another booking centre's search is not a direct-access citizen case:
+    # its Ledger replies resume that search and never reach the citizen desk.
+    if any(_is_search(row, agent) for row in chat):
+        if message.sender == LEDGER:
+            await _resume_searches(city, message, chat)
         return
     await _desk(city, message, chat, hold_self=True, fixed="CONS-GIN")
 
@@ -930,16 +956,20 @@ async def _facility(
         await _on_held(city, message, chat)
     elif message.sender == LEDGER and head == "committed":
         await _on_committed(city, message, chat)
-    elif message.sender == LEDGER and head == "refused" and "hold" in kind:
+    elif message.sender == LEDGER and head == "refused" and kind & {"hold", "commit"}:
         await _on_refused(city, message, chat, hold_self=hold_self)
     elif message.sender == LEDGER and head == "checked_in":
         await _on_checked_in(city, message, chat, reports=reports)
     elif message.sender == LEDGER and head == "reported":
         await _on_reported(city, message, chat)
+    elif message.sender == LEDGER:
+        await _resume_searches(city, message, chat)
     elif "checkin" in kind and message.sender.startswith("citizen:"):
         await _on_checkin(city, message, chat, reports=reports)
     elif "confirm" in kind:
         await _on_confirm(city, message, chat, hold_self=hold_self)
+    elif _is_search(message, city.agent_id):
+        await _on_search(city, message, chat)
 
 
 def _booking_of(chat: list[Message], agent: str, slot_id: str) -> tuple[str, str, str | None]:
@@ -1067,7 +1097,16 @@ async def _on_committed(city: City, message: Message, chat: list[Message]) -> No
     ledger_ref = fields.get("ledger_ref", "")
     if not booking_id or not ledger_ref:
         return
-    slot = fields.get("slot_id") or _hold_slot(chat, city.agent_id, fields.get("hold_id", ""))
+    # The committed line may name neither the slot nor the hold: find the slot through the
+    # hold (booking_id is the hold_id on the Ledger), else our latest hold. Without the slot
+    # the receipt would go to the citizen instead of the booking centre that confirmed.
+    slot = fields.get("slot_id") or _hold_slot(
+        chat, city.agent_id, fields.get("hold_id") or booking_id
+    )
+    if not slot:
+        for row in chat:
+            if row.sender == city.agent_id and row.text.strip().startswith("hold "):
+                slot = fields_of(row.text).get("slot_id", slot)
     sender, _, _ = _booking_of(chat, city.agent_id, slot) if slot else ("", "", None)
     target = sender or _citizen(chat)
     if not target:
@@ -1075,31 +1114,74 @@ async def _on_committed(city: City, message: Message, chat: list[Message]) -> No
     token = f"booking_id={booking_id}"
     if _we(chat, city.agent_id, token, to=target, word="booking.receipt"):
         return
-    await _say(city, target, f"booking.receipt booking_id={booking_id} ledger_ref={ledger_ref}")
+    # Only after a successful commit. offer_id and slot_id let the booking centre match the
+    # receipt to the confirm it sent (it compares them when present).
+    parts = ["booking.receipt", token, f"ledger_ref={ledger_ref}"]
+    if slot:
+        offer_id = _confirmed_offer(chat, city.agent_id, slot)
+        if offer_id:
+            parts.append(f"offer_id={offer_id}")
+        parts.append(f"slot_id={slot}")
+    await _say(city, target, " ".join(parts))
+
+
+def _confirmed_offer(chat: list[Message], agent: str, slot_id: str) -> str:
+    """The offer_id the confirm for this slot named (the booking centre's own id)."""
+
+    token = f"slot_id={slot_id}"
+    found = ""
+    for row in chat:
+        if row.sender in (LEDGER, agent) or token not in row.text.split():
+            continue
+        if "confirm" in words(row.text):
+            found = fields_of(row.text).get("offer_id", found)
+    return found
+
+
+_CODE = re.compile(r"\b[A-Z][A-Z_]{3,}\b")
+
+
+def _refusal_reason(text: str) -> str:
+    """The Ledger's refusal code (NO_CAPACITY, CONSENT_MISSING, ...), else a generic reason."""
+
+    fields = fields_of(text)
+    for key in ("code", "reason", "error"):
+        if fields.get(key):
+            return fields[key]
+    match = _CODE.search(text)
+    return match.group(0) if match else "facility_cancelled"
 
 
 async def _on_refused(
     city: City, message: Message, chat: list[Message], *, hold_self: bool
 ) -> None:
     agent = city.agent_id
-    slot = ""
-    for row in chat:
-        if row.sender == agent and row.recipient == LEDGER and "hold" in words(row.text):
-            slot = fields_of(row.text).get("slot_id", slot)
+    slot = fields_of(message.text).get("slot_id", "")
+    if not slot:
+        hold_id = fields_of(message.text).get("hold_id", "")
+        slot = _hold_slot(chat, agent, hold_id) if hold_id else ""
+    if not slot:
+        for row in chat:
+            if row.sender == agent and row.recipient == LEDGER and "hold" in words(row.text):
+                slot = fields_of(row.text).get("slot_id", slot)
     if not slot:
         return
     target, _, _ = _booking_of(chat, agent, slot)
-    offer_id = ""
-    for row in chat:
-        if f"slot_id={slot}" in row.text.split():
-            offer_id = fields_of(row.text).get("offer_id", offer_id)
+    offer_id = _confirmed_offer(chat, agent, slot)
+    if not offer_id:
+        for row in chat:
+            if f"slot_id={slot}" in row.text.split():
+                offer_id = fields_of(row.text).get("offer_id", offer_id)
     if (
         target
         and offer_id
         and not _we(chat, agent, f"offer_id={offer_id}", to=target, word="cancel")
     ):
-        await _say(city, target, f"cancel offer_id={offer_id} reason=facility_cancelled")
-    if hold_self:
+        reason = _refusal_reason(message.text)
+        await _say(city, target, f"cancel offer_id={offer_id} slot_id={slot} reason={reason}")
+    # The consultorio offers its next free slots again, but only to its own citizen: a confirm
+    # that came from another booking centre goes back to that centre with the cancel above.
+    if hold_self and target.startswith("citizen:"):
         await _advance(city, message, chat, fixed="CONS-GIN", replacing=True)
 
 
@@ -1132,7 +1214,11 @@ async def _on_checked_in(
     if reports and not _we(chat, city.agent_id, token, to=LEDGER, word="report"):
         await _say(city, LEDGER, f"report booking_id={booking_id} outcome_code=VISIT")
     if citizen and not _we(chat, city.agent_id, token, to=citizen, word="checkin"):
-        await _say(city, citizen, f"checkin booking_id={booking_id}")
+        line = f"checkin booking_id={booking_id}"
+        ledger_ref = fields_of(message.text).get("ledger_ref") or _ledger_ref(chat, booking_id)
+        if ledger_ref:
+            line += f" ledger_ref={ledger_ref}"
+        await _say(city, citizen, line)
     if not reports:
         return
     found = await _await_line(city, message.need_id, chat, "reported", token, op="report")
@@ -1153,3 +1239,325 @@ async def _on_reported(city: City, message: Message, chat: list[Message]) -> Non
     if _we(chat, city.agent_id, token, to=citizen, word="report"):
         return
     await _say(city, citizen, f"report booking_id={booking_id} outcome_code=VISIT")
+
+
+def _ledger_ref(chat: list[Message], booking_id: str) -> str:
+    token = f"booking_id={booking_id}"
+    found = ""
+    for row in chat:
+        if row.sender == LEDGER and token in row.text.split():
+            found = fields_of(row.text).get("ledger_ref", found)
+    return found
+
+
+# --- ricerca dai centri prenotazioni (need.request -> offer / cancel) ----------------------------
+#
+# Contract with the booking centre (team note, kit 0.9.202):
+#   CUP -> struttura   need.request service_type=... procedure=... priority=... request_id=...
+#   struttura -> CUP   one message, one line per slot (max 3):
+#                      offer offer_id=... slot_id=... doctor_id=... facility=... procedure=...
+#                            agenda_date=... agenda_day=... expiry=... request_id=... [priority=...]
+#                      or: cancel request_id=... reason=no_slots|reserved_u|wrong_service|...
+#   CUP -> struttura   confirm offer_id=... slot_id=... citizen=... consent_ref=...
+#                            prescription_number=... [cross_consent_ref=...] [request_id=...]
+#   struttura -> CUP   booking.receipt booking_id=... ledger_ref=... offer_id=... slot_id=...
+#                      (only after "committed"), or cancel offer_id=... slot_id=... reason=<code>
+# No citizen data travels in the search. Every reply names the request_id it answers.
+
+_TRUE = {"1", "true", "on", "yes", "active", "attiva", "in_force"}
+_ANSWERED = "answered"
+
+
+def _team_of(agent_id: str) -> str:
+    """The team segment of ``agent:<team>/<slug>``, or "" when the id does not carry it."""
+
+    head = agent_id.removeprefix("agent:")
+    return head.split("/", 1)[0] if "/" in head else ""
+
+
+def _other_asst(sender: str, me: str) -> bool:
+    theirs, ours = _team_of(sender), _team_of(me)
+    return bool(theirs and ours and theirs != ours)
+
+
+def _same_agent(a: str, b: str) -> bool:
+    if not a or not b:
+        return False
+    return a == b or a.rsplit("/", 1)[-1] == b.rsplit("/", 1)[-1]
+
+
+def _rule_on(chat: list[Message], code: str) -> bool:
+    """True when the latest ``rules`` reply of the Ledger shows rule ``code`` in force.
+
+    The exact shape of that reply is not in the kit: a ``P2=on`` style token, or the bare
+    code on a line that does not say it is off, both count.
+    """
+
+    text = ""
+    for row in chat:
+        if row.sender == LEDGER and first_word(row.text) == "rules":
+            text = row.text
+    if not text:
+        return False
+    lowered = code.lower()
+    for key, value in fields_of(text).items():
+        if key.lower() == lowered or key.lower().startswith(lowered + "_"):
+            return value.lower() in _TRUE
+    for line in text.splitlines():
+        tokens = {token.strip(".,;:()").lower() for token in line.split()}
+        if lowered in tokens:
+            return not tokens & {"off", "false", "inactive", "0", "no"}
+    return False
+
+
+def _search_fields(message: Message) -> dict[str, str]:
+    fields = fields_of(message.text)
+    if message.type != "chat":
+        for key, value in message.body.items():
+            if isinstance(value, str) and value and key not in fields:
+                fields[key] = value
+    return fields
+
+
+def _is_search(message: Message, agent: str) -> bool:
+    """A booking centre (ours or another ASST's) asking which slots we have."""
+
+    if not message.sender.startswith("agent:") or _same_agent(message.sender, agent):
+        return False
+    kind = words(message.text)
+    if kind & {"confirm", "cancel", "booking.receipt", "offer", "checkin"}:
+        return False
+    if message.type == "need.request" or "need.request" in kind:
+        return True
+    fields = fields_of(message.text)
+    return bool(fields.get("request_id") and (fields.get("procedure") or fields.get("service_type")))
+
+
+def _request_id(message: Message) -> str:
+    return _search_fields(message).get("request_id") or message.msg_id
+
+
+def _open_searches(chat: list[Message], agent: str) -> list[Message]:
+    answered: set[str] = set()
+    for row in chat:
+        if row.sender != agent or row.recipient == LEDGER:
+            continue
+        if first_word(row.text) in {"offer", "cancel"}:
+            rid = fields_of(row.text).get("request_id")
+            if rid:
+                answered.add(rid)
+    pending: list[Message] = []
+    seen: set[str] = set()
+    for row in chat:
+        if not _is_search(row, agent):
+            continue
+        rid = _request_id(row)
+        if rid in answered or rid in seen or _ANSWERED in _sent(f"search:{rid}").offers:
+            continue
+        seen.add(rid)
+        pending.append(row)
+    return pending
+
+
+async def _on_search(city: City, message: Message, chat: list[Message]) -> None:
+    async with _SearchLock(message):
+        fresh = await _reread(city, message, chat)
+        await _answer_search(city, message, message, fresh)
+
+
+async def _resume_searches(city: City, message: Message, chat: list[Message]) -> None:
+    """A Ledger reply (slots, agenda, rules) for a search an earlier turn could not finish."""
+
+    if first_word(message.text) not in {"slots", "agenda", "rules", "world"}:
+        return
+    if not _open_searches(chat, city.agent_id):
+        return
+    async with _SearchLock(message):
+        fresh = await _reread(city, message, chat)
+        for request in _open_searches(fresh, city.agent_id):
+            await _answer_search(city, message, request, fresh)
+
+
+async def _reread(city: City, message: Message, chat: list[Message]) -> list[Message]:
+    try:
+        fresh = await city.history(need_id=message.need_id)
+    except CapError:
+        return chat
+    known = {row.msg_id for row in fresh}
+    return fresh + [row for row in chat if row.msg_id not in known]
+
+
+class _SearchLock:
+    """Serialize the turns of one case, as ``_advance`` does for the desk."""
+
+    def __init__(self, message: Message) -> None:
+        self.key = "search:" + (message.need_id or message.msg_id)
+        self.gate: _Gate | None = None
+
+    async def __aenter__(self) -> None:
+        gate = _GATES.get(self.key)
+        if gate is None:
+            gate = _GATES[self.key] = _Gate()
+        gate.turns += 1
+        self.gate = gate
+        await gate.lock.acquire()
+
+    async def __aexit__(self, *exc: object) -> None:
+        gate = self.gate
+        if gate is None:
+            return
+        gate.lock.release()
+        gate.turns -= 1
+        if gate.turns == 0 and _GATES.get(self.key) is gate:
+            del _GATES[self.key]
+
+
+def _latest_slots_for(chat: list[Message], procedure: str) -> str | None:
+    """The newest ``slots`` reply that answers ``procedure`` (or names no procedure at all)."""
+
+    found: str | None = None
+    for row in chat:
+        if row.sender != LEDGER or first_word(row.text) != "slots":
+            continue
+        lines = [line for line in row.text.splitlines() if "slot_id=" in line]
+        procs = {fields_of(line).get("procedure") for line in lines} - {None}
+        if not procs or procedure in procs:
+            found = row.text
+    return found
+
+
+def _facility_slots(
+    lines: list[str], *, now: datetime | None, priority: str | None, procedure: str, me: str
+) -> tuple[list[dict[str, str]], int]:
+    """Our own free slots for ``procedure`` inside the priority window.
+
+    Returns the slots and how many were left out only because of the urgent reserve (P3).
+    Language and gender are not known in a search without citizen data, so they are not used.
+    """
+
+    if now is None:
+        horizon = None
+        earliest = None
+    elif priority == "U":
+        horizon = now.replace(hour=23, minute=59, second=59, microsecond=0)
+        earliest = now + _LEAD
+    elif priority == "P":
+        horizon = None
+        earliest = now + _LEAD
+    else:
+        horizon = now + timedelta(days=_DEADLINE_DAYS.get(priority or "", 14))
+        earliest = now + _LEAD
+    chosen: list[tuple[datetime, dict[str, str]]] = []
+    reserved = 0
+    for line in lines:
+        slot = fields_of(line)
+        slot_id = slot.get("slot_id")
+        at = _when(slot.get("at", "") or slot.get("agenda_date", ""))
+        if not slot_id or at is None:
+            continue
+        if slot.get("procedure") not in (None, procedure):
+            continue
+        if slot.get("facility") and not _same_agent(slot["facility"], me):
+            continue
+        free = slot.get("free")
+        if free is not None and free.isdigit() and int(free) <= 0:
+            continue
+        if earliest is not None and not earliest < at:
+            continue
+        if horizon is not None and at >= horizon:
+            continue
+        if slot.get("urgent_reserve", "").lower() == "true" and priority != "U":
+            reserved += 1
+            continue
+        chosen.append((at, slot))
+    chosen.sort(key=lambda item: (item[0], item[1].get("slot_id", "")))
+    return [slot for _, slot in chosen], reserved
+
+
+def _partner_offer(slot: dict[str, str], me: str, priority: str | None, request_id: str) -> str:
+    at = slot.get("at") or slot.get("agenda_date", "")
+    day = slot.get("day") or slot.get("agenda_day", "")
+    parts = [
+        "offer",
+        f"offer_id=of-{slot['slot_id']}",
+        f"slot_id={slot['slot_id']}",
+    ]
+    if slot.get("doctor_id"):
+        parts.append(f"doctor_id={slot['doctor_id']}")
+    parts += [
+        f"facility={slot.get('facility') or me}",
+        f"procedure={slot.get('procedure', '')}",
+        f"agenda_date={at}",
+    ]
+    if day:
+        parts.append(f"agenda_day={day}")
+    parts += [f"expiry={at}", f"request_id={request_id}"]
+    if priority:
+        parts.append(f"priority={priority}")
+    return " ".join(part for part in parts if not part.endswith("="))
+
+
+async def _answer_search(
+    city: City, trigger: Message, request: Message, chat: list[Message]
+) -> None:
+    agent = city.agent_id
+    fields = _search_fields(request)
+    rid = _request_id(request)
+    centre = request.sender
+    done = _sent(f"search:{rid}")
+    if _ANSWERED in done.offers:
+        return
+
+    async def reply(text: str) -> None:
+        if await _say(city, centre, text):
+            done.offers.add(_ANSWERED)
+
+    family = role_of()
+    service = fields.get("service_type", "")
+    if service and family and service.split(".", 1)[0] != family:
+        await reply(f"cancel request_id={rid} reason=wrong_service service_type={service}")
+        return
+    procedure = fields.get("procedure") or ("CONS-GIN" if family == "family_counseling" else "")
+    if not procedure:
+        await reply(f"cancel request_id={rid} reason=procedure_missing")
+        return
+    priority = (fields.get("priority") or "").upper() or None
+
+    world = _latest_slots_for(chat, procedure)
+    agenda = _ledger(chat, "agenda")
+    now = _when("" if agenda is None else agenda.get("agenda_now", ""))
+    if world is None or now is None:
+        if world is None and not _asked(chat, agent, procedure, 1):
+            await _say(city, LEDGER, f"world procedure={procedure} page=1")
+        if now is None and not _exact(chat, agent, "agenda"):
+            await _say(city, LEDGER, "agenda")
+        if not _exact(chat, agent, "rules"):
+            await _say(city, LEDGER, "rules")
+        chat = await _until(
+            city,
+            request.need_id,
+            chat,
+            lambda rows: _latest_slots_for(rows, procedure) is not None and _has_agenda(rows),
+        )
+        world = _latest_slots_for(chat, procedure)
+        agenda = _ledger(chat, "agenda")
+        now = _when("" if agenda is None else agenda.get("agenda_now", ""))
+        if world is None or now is None:
+            # The Ledger answers in a later turn; _resume_searches picks the search up there.
+            return
+
+    lines = [line for line in world.splitlines() if "slot_id=" in line]
+    slots, reserved = _facility_slots(
+        lines, now=now, priority=priority, procedure=procedure, me=agent
+    )
+    if slots:
+        offers = [_partner_offer(slot, agent, priority, rid) for slot in slots[:3]]
+        await reply("\n".join(offers))
+        return
+    page, pages = _page(world)
+    if page < pages and page < _MAX_PAGE:
+        if not _asked(chat, agent, procedure, page + 1):
+            await _say(city, LEDGER, f"world procedure={procedure} page={page + 1}")
+        return
+    reason = "reserved_u" if reserved else "no_slots"
+    await reply(f"cancel request_id={rid} reason={reason} procedure={procedure}")
