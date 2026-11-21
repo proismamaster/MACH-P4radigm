@@ -1,6 +1,25 @@
 
 # Problemi
 
+## Consultorio 1.0.13 e il cambio di pod (21/11, messaggi fino alle 11:23 UTC)
+
+- **Un terzo hold dopo il cancel.** `N-2026-11-02-8909110003810002` (orari `sent_at`, UTC):
+
+| ora | evento |
+|---|---|
+| 10:44:00, 10:55:42 | hold e riprova sullo slot `…20261225-1030` |
+| 11:06:57 | `refused commit code=STALE_FENCE` (il secondo) |
+| 11:07:03 | cancel al cittadino (pod 1.0.12, fermato alle 11:07:50 circa), `agenda` e `world page=1` chiesti |
+| 11:12:09 | il cittadino conferma di nuovo lo stesso slot (push consegnato al pod nuovo alle 11:13) |
+| 11:13:05 | **terzo hold** sullo slot annullato (pod 1.0.13) |
+| 11:13:08 | arrivano `agenda` e `slots page=1/4` (risposta del Ledger a una richiesta di 6 minuti prima) |
+| 11:22:33 | `refused hold code=EXPIRED detail=slot ... has passed` |
+
+  Cause possibili, la correzione le copre entrambe: il rifiuto delle 11:06:57 riconsegnato al pod nuovo (la memoria della riprova era vuota e la cronologia mostrava solo il cancel dopo di esso), oppure il confirm ripetuto del cittadino su uno slot di cui la cronologia ha il cancel. Un caso simile: `…3760002` ha avuto cancel `reason=past` alle 11:13:41 e un hold sullo stesso slot alle 11:15:35.
+- **`…911000396`, il caso più pulito** (nessun messaggio del cittadino in mezzo): secondo `STALE_FENCE` 11:03:33, cancel e `world page=2` 11:03:35 (pod 1.0.12); **terzo hold 11:09:15** (pod 1.0.13, il rifiuto riconsegnato dopo il rilascio delle 11:07); pagina 2 del Ledger accettata 11:09:21; `refused hold code=EXPIRED` 11:16:45; prime offerte sostitutive **11:26:42**, 23 minuti dopo il cancel e solo dopo il rifiuto del terzo hold (il push della pagina 2 trovava la memoria vuota e il `return` ai push del Ledger). Con la correzione il push della pagina 2 manda le offerte e il rifiuto riconsegnato non fa un hold.
+- **Offerte sostitutive dopo `cancel past`**: `…3760002` cancel 11:13:41, pagina 2 chiesta nello stesso secondo; `…3290006` cancel EXPIRED 11:05:23, pagina 2 alle 11:11:22, offerte al cittadino alle 11:18:17. Funzionano; il ritardo viene dal Ledger (5-6 minuti) e dal push (1-6 minuti).
+- **Caso con la ricerca di un CUP nello stesso `need_id`**: in `…3810002` l'`agent:yr8hjc5q7n98` ha mandato un `need.request` alle 11:09:34. Da quel momento `_family` mandava le risposte del Ledger solo alla ricerca e il desk del cittadino non completava mai le offerte sostitutive.
+- Correzione sul branch `hapca/consultorio-stato-dalla-cronologia` (`_reacted_since`, `_cancelled_for`, `_owed`, `_resume_owed`, riprova solo con un hold precedente): non pubblicata, aspetta l'OK al rilascio. Prova: `tools/test_consultorio_ledger_lento.py`, funzione `cambio_di_pod`.
 ## CUP: ricerche ai partner e alternative dopo un rifiuto per scadenza (21/11)
 
 - La #86 filtrava i nuovi risultati dell'Index. Il test dimostra che la lista del ring e i partner appresi potevano riportare nella ricerca una struttura con un ruolo o un servizio incompatibile. Il CUP applica la stessa esclusione alla lista finale.

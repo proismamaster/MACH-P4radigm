@@ -874,6 +874,7 @@ async def _advance(
     *,
     fixed: str | None,
     replacing: bool,
+    resume: bool = False,
 ) -> None:
     key = message.need_id or message.msg_id
     gate = _GATES.get(key)
@@ -882,7 +883,7 @@ async def _advance(
     gate.turns += 1
     try:
         async with gate.lock:
-            await _advance_alone(city, message, chat, key, fixed=fixed, replacing=replacing)
+            await _advance_alone(city, message, chat, key, fixed=fixed, replacing=replacing, resume=resume)
     finally:
         gate.turns -= 1
         if gate.turns == 0 and _GATES.get(key) is gate:
@@ -897,11 +898,29 @@ async def _advance_alone(
     *,
     fixed: str | None,
     replacing: bool,
+    resume: bool = False,
 ) -> None:
     agent = city.agent_id
     citizen = _citizen(chat)
     if citizen is None or not fixed:
         return
+    # This turn holds the lock of the case: what the turns before it sent (and what the pod before this one
+    # sent, after a release) is in the history now. The state below is read from there, not from the read
+    # this turn made before it got the lock.
+    chat = await _reread(city, message, chat)
+    sent = _sent(key)
+
+    def owing(rows: list[Message]) -> tuple[str, bool]:
+        """The cancel the citizen still waits for offers after, and whether this case owes them: a replacement
+        not sent yet (the Ledger answered after the wait of the turn that sent the cancel, console 911000381:
+        five minutes without offers) is completed by the turn of that answer. The cancel without offers
+        after it is in the history too, which a pod that took over (a release) can read: console 003810002,
+        the cancel went out from the old pod, the Ledger's page reached the new one."""
+        owed = _owed(rows, agent, citizen)
+        return owed, _PENDING in sent.offers or bool(owed and f"replaced:{owed}" not in sent.offers)
+
+    if resume and not owing(chat)[1]:
+        return  # only finishing the offers a cancel dropped: nothing is owed, a citizen's message gets no more
     # Direct access: no prescription and no waiting list, the procedure is fixed. Ask, then
     # read the reply from history: the push of a ledger message does not open a turn.
     procedure, priority, number = fixed, None, None
@@ -930,11 +949,11 @@ async def _advance_alone(
         return
     # A cancel drops every offer the citizen was holding, so the ones still free are sent again,
     # once per cancel: a second turn for the same cancel or refusal does not repeat them.
-    sent = _sent(key)
     refused = {item.removeprefix("refused:") for item in sent.offers if item.startswith("refused:")}
-    # A replacement not sent yet (the Ledger answered after the wait of the turn that sent the cancel,
-    # console 911000381: five minutes without offers) is completed by the turn of that answer.
-    replacing = replacing or _PENDING in sent.offers
+    owed, pending = owing(chat)  # the wait above may have shown the offers sent meanwhile
+    replacing = replacing or pending
+    if resume and not replacing:
+        return
     if replacing:
         trigger = fields_of(message.text).get("offer_id") or message.msg_id
         if sent.trigger != trigger:
@@ -943,7 +962,7 @@ async def _advance_alone(
         taken = _withdrawn(chat, agent) | sent.again
     else:
         taken = _offered(chat, agent) | {
-            item for item in sent.offers if not item.startswith(("refused:", _PENDING))
+            item for item in sent.offers if not item.startswith(("refused:", "replaced:", _PENDING))
         }
         if taken and message.sender == LEDGER:
             # A Ledger reply (agenda, slots) after our offers: each of them used to add three more.
@@ -973,6 +992,8 @@ async def _advance_alone(
         lines.append("Mi risponda con l'orario che preferisce; se nessuno le va bene, me lo dica e cerco altre date.")
         if await _say(city, citizen, "\n".join(lines)):
             sent.offers.discard(_PENDING)
+            if owed:
+                sent.offers.add(f"replaced:{owed}")  # the history may not show these offers to the next turn yet
             for slot in picked:
                 sent.offers.add(slot["slot_id"])
                 _OFFERED[slot["slot_id"]] = monotonic()
@@ -1054,6 +1075,11 @@ async def _confirm_once(
         if not _we(chat, agent, f"slot_id={slot}", to=message.sender, word="cancel"):
             ids = (f"offer_id={offer_id} " if offer_id else "") + f"slot_id={slot}"
             await _say(city, message.sender, f"cancel {ids} reason=past Questo orario è già passato.")
+        elif "cancel" in _reacted_since(chat, agent, slot, message):
+            # This very confirm was answered already (the pod before was stopped in the middle of it).
+            if hold_self and message.sender.startswith("citizen:"):
+                await _resume_owed(city, message, chat)
+            return
         if hold_self and message.sender.startswith("citizen:"):
             await _replace_offers(city, message, chat)
         return
@@ -1063,9 +1089,18 @@ async def _confirm_once(
     # Answer now, with the next free slots, and only once per confirm.
     key = message.need_id or message.msg_id
     gone = _gone(besides=key)
-    if f"refused:{slot}" in _sent(key).offers or slot in gone:
+    if (
+        f"refused:{slot}" in _sent(key).offers
+        or _cancelled_for(chat, agent, slot, message.sender)  # a pod that took over knows it from the history
+        or slot in gone
+    ):
         if f"gone:{message.msg_id}" not in memory.offers:
             memory.offers.add(f"gone:{message.msg_id}")
+            if "cancel" in _reacted_since(chat, agent, slot, message):
+                # This very confirm was answered already (the pod before was stopped in the middle of it).
+                if hold_self and message.sender.startswith("citizen:"):
+                    await _resume_owed(city, message, chat)
+                return
             code = "EXPIRED" if _GONE.get(slot, (0, "", ""))[1] == "past" else "NO_CAPACITY"
             await _recover(city, message, chat, slot, code, hold_self=hold_self,
                            target=message.sender, offer_id=offer_id)
@@ -1149,6 +1184,10 @@ async def _family(city: City, message: Message, chat: list[Message]) -> None:
     if any(_is_search(row, agent) for row in chat):
         if message.sender == LEDGER:
             await _resume_searches(city, message, chat)
+            # The citizen of a case a booking centre searched in too (console 003810002) may be waiting for the
+            # offers a cancel of ours dropped: the Ledger's agenda and slots complete them as in any other case.
+            if first_word(message.text) in {"slots", "agenda"}:
+                await _resume_owed(city, message, chat)
         return
     await _desk(city, message, chat, hold_self=True, fixed="CONS-GIN")
 
@@ -1222,18 +1261,72 @@ def _our_commit(chat: list[Message], agent: str, hold_id: str) -> bool:
     return False
 
 
-def _held_since(chat: list[Message], agent: str, slot: str, row: Message) -> bool:
-    """A hold of ours for ``slot`` after ``row`` in the case: the retry is already on its way."""
+def _reacted_since(chat: list[Message], agent: str, slot: str, row: Message) -> set[str]:
+    """How we already answered ``row`` (a refusal or a confirm for ``slot``), as the case history shows it:
+    ``"hold"`` (a hold of ours for the slot follows it: the retry is on its way) and ``"cancel"`` (so does the
+    cancel, or hold_refused, that tells who confirmed). Empty: not answered.
+
+    A pod that takes over (a release) has no memory of what the one before did: console 003290005 (two
+    retry holds for one STALE_FENCE) and 003810002 (the second refusal handled by the old pod, answered
+    again by the new one: a third hold on a slot the citizen had been told was gone). A refusal that is in no
+    history (the Relay's own) is never answered yet."""
 
     order = {item.msg_id: index for index, item in enumerate(chat)}
     start = order.get(row.msg_id)
     if start is None:
-        return False
-    return any(
-        item.sender == agent and item.recipient == LEDGER and first_word(item.text) == "hold"
-        and f"slot_id={slot}" in item.text.split()
-        for item in chat[start + 1:]
-    )
+        return set()
+    token = f"slot_id={slot}"
+    found: set[str] = set()
+    for item in chat[start + 1:]:
+        if item.sender != agent:
+            continue
+        for line in item.text.splitlines():
+            if token not in line.split():
+                continue
+            if first_word(line) == "hold" and item.recipient == LEDGER:
+                found.add("hold")
+            elif first_word(line) in {"cancel", "hold_refused"} and item.recipient != LEDGER:
+                found.add("cancel")
+    return found
+
+
+def _cancelled_for(chat: list[Message], agent: str, slot: str, to: str) -> bool:
+    """We already told ``to`` the slot is gone (a cancel or hold_refused for it): this case never holds it again.
+
+    This process keeps it in memory too (``refused:``); after a release only the history has it. A missing
+    consent or prescription says nothing about the slot: the confirm may come again with them."""
+
+    token = f"slot_id={slot}"
+    for row in chat:
+        if row.sender != agent or row.recipient != to:
+            continue
+        for line in row.text.splitlines():
+            if first_word(line) in {"cancel", "hold_refused"} and token in line.split():
+                if fields_of(line).get("reason") not in {"consent_missing", "prescription_expired"}:
+                    return True
+    return False
+
+
+def _owed(chat: list[Message], agent: str, citizen: str) -> str:
+    """The cancel of ours the citizen got last, when no offer or receipt of ours follows it (its msg_id): the
+    offers it dropped are still owed. Empty when the citizen is not waiting for any.
+
+    This used to live only in the memory of the pod that sent the cancel (``replace:pending``): the Ledger
+    answers the agenda and the next page in minutes, a release in between left the citizen without offers.
+    A facility's cancel of a booking (booking_id=) is another flow and brings its own offers."""
+
+    owed = ""
+    for row in chat:
+        if row.sender != agent or row.recipient != citizen:
+            continue
+        head = first_word(row.text)
+        if any(first_word(line) == "offer" for line in row.text.splitlines()) or head == "booking.receipt":
+            owed = ""
+        elif head == "cancel":
+            fields = fields_of(row.text)
+            if fields.get("slot_id") and not fields.get("booking_id"):
+                owed = row.msg_id
+    return owed
 
 
 def _latest_hold(chat: list[Message], agent: str) -> tuple[str, str | None]:
@@ -1446,10 +1539,6 @@ async def _on_refused(
     if f"refusal:{message.msg_id}" in memory.offers:
         return
     memory.offers.add(f"refusal:{message.msg_id}")
-    # Another pod (a release) has no memory of this refusal: its history shows whether a hold of ours for
-    # this slot already follows it (console 003290005: two retry holds for one STALE_FENCE).
-    if _held_since(chat, agent, slot, message):
-        return
     reason = _refusal_reason(message.text)
     code = reason.upper()
     commit = "commit" in words(message.text)
@@ -1464,16 +1553,28 @@ async def _on_refused(
         _mark_gone(slot, "past", owner)
     else:
         _release(slot, owner)
+    # Who confirmed: from our hold line, else (a hold the Relay refused is in no history) from the confirm.
+    target = _booking_of(chat, agent, slot)[0] or asker or _citizen(chat) or ""
+    # Another pod (a release) has no memory of this refusal: its history shows whether we already answered it,
+    # with the retry (console 003290005: two retry holds for one STALE_FENCE) or with the cancel (003810002:
+    # a third hold for a citizen who had the cancel).
+    answered = _reacted_since(chat, agent, slot, message)
+    if answered:
+        if "cancel" in answered and hold_self and target.startswith("citizen:"):
+            # What the pod before left half done, the replacement offers, is finished from the history.
+            await _resume_owed(city, message, chat)
+        return
     # A commit refused for an old fence or an expired hold (console 256, 229, 248: the Ledger took longer
     # than the lease): the citizen's confirm is still good, so hold and commit once more before cancelling.
-    # One retry per slot. EXPIRED on a hold is a slot that has passed: another hold cannot work.
+    # One retry per slot: this process remembers it, and so does the history (a second hold of ours for the
+    # slot is the retry). EXPIRED on a hold is a slot that has passed: another hold cannot work.
     if (code == "STALE_FENCE" or (code == "EXPIRED" and commit)) and f"retry:{slot}" not in memory.offers:
         prior = [
             row for row in chat
             if row.sender == agent and row.recipient == LEDGER and first_word(row.text) == "hold"
             and f"slot_id={slot}" in row.text.split()
         ]
-        if prior:
+        if len(prior) == 1:
             memory.offers.add(f"retry:{slot}")
             _mark_gone(slot, "held", owner)
             if await _say(city, LEDGER, prior[-1].text):
@@ -1481,8 +1582,6 @@ async def _on_refused(
                 await _finish_booking(city, message, chat, slot, hold_self=hold_self, skip=known)
                 return
             _release(slot, owner)
-    # Who confirmed: from our hold line, else (a hold the Relay refused is in no history) from the confirm.
-    target = _booking_of(chat, agent, slot)[0] or asker or _citizen(chat) or ""
     await _recover(city, message, chat, slot, reason, hold_self=hold_self, target=target)
 
 
@@ -1523,6 +1622,16 @@ async def _recover(
     # that came from another booking centre goes back to that centre with the cancel above.
     if hold_self and target.startswith("citizen:"):
         await _replace_offers(city, message, chat)
+
+
+async def _resume_owed(city: City, message: Message, chat: list[Message]) -> None:
+    """A message we already answered with a cancel comes again (the pod before was stopped, the Ledger's reply
+    comes late): send the offers that cancel dropped if they are still owed, and nothing else. The cancel
+    is never repeated and the offers are never sent twice: ``_owed`` reads both from the history."""
+
+    citizen = _citizen(chat)
+    if citizen and _owed(chat, city.agent_id, citizen):
+        await _advance(city, message, chat, fixed="CONS-GIN", replacing=False, resume=True)
 
 
 async def _replace_offers(city: City, message: Message, chat: list[Message]) -> None:
