@@ -1,5 +1,21 @@
 # Journal (la voce più recente in alto)
 
+## 2026-11-21 03:20 — Andrei (Claude) — Ospedale: livelli 6, 7 e 8 portati dal consultorio
+
+**Fatto**
+- L6: `fault.cancel` (o `hold.expired`, solo da Ledger o città) di una nostra prenotazione → a chi ha prenotato UN messaggio: `cancel reason=facility_cancelled booking_id=...` e sotto fino a 3 offerte, prima lo stesso medico, mai lo slot annullato; per un CUP con il suo `request_id` e i filtri lingua/genere della sua ricerca. Annullo ripetuto: nessun secondo messaggio. Codice di Hapca (`_rebook` e collegati), procedura di default VIS-FIS.
+- L7: stessa `request_id` = stesse offerte parola per parola, anche se il Ledger cambia; stesso confirm = stessa ricevuta reinviata una volta, mai un secondo hold (si somma a #46).
+- L8: rifiuti al CUP `cancel reason=prescription_expired|consent_missing|no_capacity` in minuscolo, gli altri `hold_refused ... ledger_code=<CODICE>`; P2 rilegge `rules` sul confirm di un CUP esterno (`_fresh_rules`).
+- La correzione della conformance (#67) resta: nessuna risposta ai `need.request` senza `request_id`/`procedure`/`service_type` (prova E verde).
+- Test: prove F (L6) e G (L8) nuove; A e B aggiornate a L7/L8. Su `main` fallivano 18 controlli nuovi o aggiornati; qui A, B, D, E, F, G verdi 5 volte su 5, C fallisce come atteso. `test_fix.py` verde, card valida.
+
+**Problemi**
+- Il formato dell'annullo (`fault.cancel`, `hold.expired`) non è nel kit: letto in modo largo come nel consultorio. Da verificare in console al primo annullo vero.
+- `tools/test_mach12_struttura.py` sull'ospedale: 8 controlli MACH-1.2 (giorni/orari, offerte rilassate) falliscono come prima. È lavoro di livello 5, non in questo compito.
+
+**Prossimo passo**
+- Deploy dell'ospedale dopo la 1.0.1 (Opus), poi guardare in console un percorso con `fault.cancel`.
+
 ## 2026-11-21 02:40 — Andrei (Claude) — Ospedale: perché la 1.0.1 non passa la conformance
 
 **Fatto**
