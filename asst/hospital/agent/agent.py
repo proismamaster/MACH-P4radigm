@@ -1469,7 +1469,9 @@ def _facility_slots(
             reserved += 1
             continue
         chosen.append((at, slot))
-    decided = None if now is None or priority == "U" else now + _DECISION_LEAD
+    # B and U windows are short (the deadline counts from the citizen's first message to the GP,
+    # ~20 agenda hours before the booking centre writes): the soonest slot past the minimum first.
+    decided = None if now is None or priority in ("U", "B") else now + _DECISION_LEAD
     chosen.sort(key=lambda item: (decided is not None and item[0] < decided, item[0], item[1].get("slot_id", "")))
     return [slot for _, slot in chosen], reserved
 
@@ -1516,6 +1518,10 @@ def _partner_offer(slot: dict[str, str], me: str, priority: str | None, request_
     if priority:
         parts.append(f"priority={priority}")
     return " ".join(part for part in parts if not part.endswith("="))
+
+
+def _stamp(value: str) -> datetime | None:
+    return _when(value) if "T" in value else None
 
 
 async def _answer_search(
@@ -1586,6 +1592,13 @@ async def _answer_search(
     want_gender = fields.get("gender_preference") or fields.get("gender") or ""
     want_gender = want_gender if want_gender in {"m", "f"} else ""
     slots = [slot for slot in slots if _doctor_fits(slot, want_lang, want_gender)]
+    # MACH-1.3: the asker's window with date and time; a slot outside it would be refused.
+    earliest, deadline = _stamp(fields.get("earliest", "") or fields.get("after", "")), _stamp(fields.get("deadline", ""))
+    slots = [
+        slot for slot in slots
+        if (at := _when(slot.get("at", "") or slot.get("agenda_date", ""))) is None
+        or ((earliest is None or at >= earliest) and (deadline is None or at <= deadline))
+    ]
     if slots:
         offers = [_partner_offer(slot, agent, priority, rid) for slot in slots[:3]]
         await reply("\n".join(offers))
@@ -1595,7 +1608,7 @@ async def _answer_search(
         if not _asked(chat, agent, procedure, page + 1):
             await _say(city, LEDGER, f"world procedure={procedure} page={page + 1}")
         return
-    reason = "reserved_u" if reserved else "no_slots"
+    reason = "reserved_u" if reserved else "no_availability"  # MACH-1.2/1.3 code
     await reply(f"cancel request_id={rid} reason={reason} procedure={procedure}")
 
 

@@ -524,6 +524,48 @@ async def anticipo_degli_slot() -> None:
           got == ["TUE-41h", "WED-65h", "MON-17h"], h)
 
 
+# --- MACH-1.3 e slot passati ---------------------------------------------------------------------
+# - Una ricerca con deadline=/earliest= (data e ora) non riceve slot fuori finestra, nemmeno rilassati.
+# - Al confirm, uno slot passato o a meno di un'ora non va in hold: cancel reason=past e nuove offerte.
+# - L'orologio d'agenda si estrapola dal tempo reale: prima il consultorio riproponeva slot passati.
+
+
+async def mach13_e_slot_passati() -> None:
+    print("MACH-1.3 e slot passati")
+    h = harness([V1, X_DAYS])
+    await h.turn(CUP, search("rq-D1", "mach=1.3 deadline=2026-11-24T12:00:00Z"))
+    out = " ".join(replies(h))
+    check("deadline= con data: V-1 (24/11 10:00Z) offerto, X-days (25/11) mai, nemmeno rilassato",
+          "slot_id=V-1" in out and "X-days" not in out, h)
+    h = harness([V1])
+    await h.turn(CUP, search("rq-D2", "mach=1.3 earliest=2026-11-24T12:00:00Z"))
+    out = " ".join(replies(h))
+    check("earliest= con data dopo lo slot: nessuna offerta, cancel no_availability",
+          "slot_id=V-1" not in out and "reason=no_availability" in out, h)
+
+    cit = "citizen:t02/c-0900"
+    near = slot("P-near", "2026-11-23T13:00:00.000Z", "mon")   # 14:00 locali, 6 ore dopo le 08:00
+    later = slot("P-later", "2026-11-25T09:30:00.000Z", "wed")
+    h = harness([near, later])
+    await h.turn(cit, "vorrei una visita ginecologica")
+    h.port.log.append(tf.Message(type="chat", sender=tf.LEDGER, recipient=ME, msg_id="ag-late",
+                                 need_id=h.need, body={"text": "agenda agenda_now=2026-11-23T13:30:00+01:00"}))
+    await h.turn(cit, "confirm offer_id=of-P-near consent_ref=cons-N-booking")
+    check("confirm di uno slot a mezz'ora: nessun hold", not any("slot_id=P-near" in t for t in h.out(tf.LEDGER, "hold")), h)
+    check("... e cancel reason=past al cittadino", any("reason=past" in t and "slot_id=P-near" in t
+                                                       for t in h.out(cit, "cancel")), h)
+
+    from datetime import datetime, timezone
+    rows = [tf.Message(type="chat", sender=tf.LEDGER, recipient=ME, msg_id="a", need_id="N",
+                       body={"text": "agenda agenda_now=2026-11-23T08:00:00Z"}, sent_at="2026-11-21T04:00:00Z")]
+    got = tf_mod_agenda(rows, datetime(2026, 11, 21, 4, 20, tzinfo=timezone.utc))
+    check("orologio: 20 minuti reali dopo la lettura = 20 ore d'agenda dopo", got == datetime(2026, 11, 24, 4, 0, tzinfo=timezone.utc))
+
+
+def tf_mod_agenda(rows, real_now):
+    return tf.load(CAP, ME)._agenda_now(rows, real_now)
+
+
 async def run() -> None:
     await righe_vere()
     await criteri_estesi()
@@ -534,6 +576,7 @@ async def run() -> None:
         await riprenota_cup()
         await idempotenza()
         await riprova_hold_scaduto()
+        await mach13_e_slot_passati()
         await anticipo_degli_slot()
         await codici_del_ledger()
         await regole_a_meta_partita()

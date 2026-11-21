@@ -690,13 +690,16 @@ async def prova_k() -> None:
         "slot_id=F-1 doctor_id=D-x1 facility=ME procedure=VIS-FIS at=2026-11-24T10:00:00+01:00 day=tue free=1",
         "slot_id=F-2 doctor_id=D-x2 facility=ME procedure=VIS-FIS at=2026-11-24T15:00:00+01:00 day=tue free=1",
     ]
-    h = Harness("hospital.physiatry", HOSP, World(HOSP, {"VIS-FIS:1": slots_reply(HOSP, rows)}))
-    await h.turn(CUP_EXT, SEARCH)
-    offers = h.out(CUP_EXT, "offer")
-    order = [w.split("=", 1)[1] for line in (offers[0].splitlines() if offers else [])
-             for w in line.split() if w.startswith("slot_id=")]
-    check("B di lunedi' 08:00: prima martedi' (F-1, F-2, oltre 24 ore), poi il vicino N-1",
-          order == ["F-1", "F-2", "N-1"], h, )
+    # D (5 giorni): prima gli slot ad almeno 24 ore. B (scadenza dalla nascita del need, ~20 ore gia'
+    # passate quando il CUP scrive): il piu' vicino prima, come chiede MACH-1.3.
+    for priority, expected, label in (("D", ["F-1", "F-2", "N-1"], "D: prima martedi' (oltre 24 ore), poi il vicino N-1"),
+                                      ("B", ["N-1", "N-2", "F-1"], "B: prima il piu' vicino (finestra corta)")):
+        h = Harness("hospital.physiatry", HOSP, World(HOSP, {"VIS-FIS:1": slots_reply(HOSP, rows)}))
+        await h.turn(CUP_EXT, SEARCH.replace("priority=B", f"priority={priority}").replace("rq-T1", f"rq-K{priority}"))
+        offers = h.out(CUP_EXT, "offer")
+        order = [w.split("=", 1)[1] for line in (offers[0].splitlines() if offers else [])
+                 for w in line.split() if w.startswith("slot_id=")]
+        check(f"lunedi' 08:00, {label}", order == expected, h)
 
     h = Harness("hospital.physiatry", HOSP, World(HOSP, {"VIS-FIS:1": slots_reply(HOSP, rows)}))
     await h.turn(CUP_EXT, SEARCH.replace("priority=B", "priority=U"))

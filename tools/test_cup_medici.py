@@ -160,7 +160,9 @@ for day_format in ("days=Wed/mon/mon/sat", "days=[Wed, mon, mon, sat]"):
     messages = asyncio.run(search_messages(day_format))
     check(f"invia solo criteri di ricerca e giorni normalizzati da {day_format}",
           bool(messages) and all(fields.get("days") == "mon/wed"
-                                and set(fields) == {"service_type", "procedure", "priority", "request_id", "days"}
+                                # MACH-1.3: mach, earliest, deadline sono criteri della finestra, non dati del cittadino
+                                and set(fields) - {"mach", "earliest", "deadline"}
+                                == {"service_type", "procedure", "priority", "request_id", "days"}
                                 for fields in messages))
 messages = asyncio.run(search_messages(""))
 check("omette days se il cittadino non indica giorni",

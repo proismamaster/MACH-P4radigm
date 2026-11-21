@@ -392,6 +392,47 @@ def _speaks(doctor_id: str, lang: str) -> bool:
     return "*" in langs and lang not in {"it", "en"}
 
 
+_AGENDA_RATE = 60  # one real minute is one agenda hour
+_HOLD_MARGIN = timedelta(hours=1)  # hold and commit take real time: a slot this close is gone
+
+
+def _agenda_add(start: datetime, delta: timedelta) -> datetime:
+    """``start`` plus ``delta`` of agenda time; Saturday and Sunday do not exist in the agenda."""
+    out = start
+    while delta > timedelta(0):
+        midnight = (out + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        step = min(delta, midnight - out)
+        out, delta = out + step, delta - step
+        if out.weekday() >= 5:
+            out += timedelta(days=7 - out.weekday())
+    return out
+
+
+def _agenda_now(chat: list[Message], real_now: datetime | None = None) -> datetime | None:
+    """The agenda clock now: the Ledger's last agenda_now plus the real time since that reply x60.
+    The raw value is hours old by the time the citizen answers (console 21/11: past slots offered
+    again after a cancel, then refused with reason=past)."""
+    found: tuple[datetime, datetime | None] | None = None
+    for row in chat:
+        if row.sender == LEDGER and first_word(row.text) == "agenda":
+            at = _when(fields_of(row.text).get("agenda_now", ""))
+            if at is not None:
+                found = (at, _when(row.sent_at or ""))
+    if found is None:
+        return None
+    at, read = found
+    if read is None:
+        return at
+    elapsed = (real_now or datetime.now(timezone.utc)) - read
+    return _agenda_add(at, max(elapsed, timedelta(0)) * _AGENDA_RATE)
+
+
+def _lead(priority: str | None) -> timedelta:
+    """B and U windows are short (the deadline counts from the citizen's first message to the GP):
+    the soonest slot past the minimum wins. Otherwise slots 30 hours ahead come first."""
+    return _MIN_LEAD if priority in ("B", "U") else _LEAD
+
+
 def _ahead(now: datetime, at: datetime) -> timedelta:
     """Agenda time from ``now`` to ``at``: Saturday and Sunday do not exist in the agenda, so the
     days between do not count (Friday 17:00 to Monday 10:30 is 17 hours and a half)."""
@@ -456,7 +497,7 @@ def fitting(
             if gender and spec[1] != gender:
                 continue
         chosen.append((at, slot))
-    chosen.sort(key=lambda item: (now is not None and _ahead(now, item[0]) < _LEAD, item[0], item[1].get("slot_id", "")))
+    chosen.sort(key=lambda item: (now is not None and _ahead(now, item[0]) < _lead(priority), item[0], item[1].get("slot_id", "")))
     return [slot for _, slot in chosen]
 
 
@@ -690,8 +731,7 @@ async def _advance_alone(
     procedure, priority, number = fixed, None, None
     now = world = None
     for _pass in range(3):
-        agenda = _ledger(chat, "agenda")
-        now = _when("" if agenda is None else agenda.get("agenda_now", ""))
+        now = _agenda_now(chat)
         world = _latest_slots(chat)
         if now is not None and world is not None:
             break
@@ -804,6 +844,18 @@ async def _confirm_once(
             return
         memory.offers.add(f"resent:{message.msg_id}")
         await _say(city, message.sender, receipt.text)
+        return
+    # MACH-1.3 R7: compare the agenda with the slot before the hold. A slot already past, or too
+    # close to hold and commit, is answered with reason=past and new offers (console 21/11: the
+    # citizen confirmed 20 minutes after the offer and the Ledger refused the hold with EXPIRED).
+    at = _when(offer.get("agenda_date", "") or offer.get("at", ""))
+    now = _agenda_now(chat)
+    if at is not None and now is not None and at <= now + _HOLD_MARGIN:
+        if not _we(chat, agent, f"slot_id={slot}", to=message.sender, word="cancel"):
+            ids = (f"offer_id={offer_id} " if offer_id else "") + f"slot_id={slot}"
+            await _say(city, message.sender, f"cancel {ids} reason=past Questo orario è già passato.")
+        if hold_self and message.sender.startswith("citizen:"):
+            await _advance(city, message, chat, fixed="CONS-GIN", replacing=True)
         return
     citizen = fields.get("citizen") or (
         message.sender if message.sender.startswith("citizen:") else ""
@@ -1438,7 +1490,7 @@ def _facility_slots(
             reserved += 1
             continue
         chosen.append((at, slot))
-    chosen.sort(key=lambda item: (now is not None and _ahead(now, item[0]) < _LEAD, item[0], item[1].get("slot_id", "")))
+    chosen.sort(key=lambda item: (now is not None and _ahead(now, item[0]) < _lead(priority), item[0], item[1].get("slot_id", "")))
     return [slot for _, slot in chosen], reserved
 
 
@@ -1544,8 +1596,7 @@ async def _answer_search(
     priority = (fields.get("priority") or "").upper() or None
 
     world = _latest_slots_for(chat, procedure)
-    agenda = _ledger(chat, "agenda")
-    now = _when("" if agenda is None else agenda.get("agenda_now", ""))
+    now = _agenda_now(chat)
     if world is None or now is None:
         if world is None and not _asked(chat, agent, procedure, 1):
             await _say(city, LEDGER, f"world procedure={procedure} page=1")
@@ -1560,8 +1611,7 @@ async def _answer_search(
             lambda rows: _latest_slots_for(rows, procedure) is not None and _has_agenda(rows),
         )
         world = _latest_slots_for(chat, procedure)
-        agenda = _ledger(chat, "agenda")
-        now = _when("" if agenda is None else agenda.get("agenda_now", ""))
+        now = _agenda_now(chat)
         if world is None or now is None:
             # The Ledger answers in a later turn; _resume_searches picks the search up there.
             return
@@ -1629,7 +1679,14 @@ def _criteria(fields: dict[str, str]) -> dict:
         "after": _clock(fields.get("after", "")),
         "before": _clock(fields.get("before", "")),
         "wheelchair": fields.get("wheelchair", "").lower() in _TRUE,
+        # MACH-1.3: the asker's window with date and time (after= with a date is the start too).
+        "earliest": _stamp(fields.get("earliest", "") or fields.get("after", "")),
+        "deadline": _stamp(fields.get("deadline", "")),
     }
+
+
+def _stamp(value: str) -> datetime | None:
+    return _when(value) if "T" in value else None
 
 
 def _all_slot_lines(chat: list[Message], procedure: str) -> list[str]:
@@ -1657,6 +1714,10 @@ def _violations(slot: dict[str, str], criteria: dict) -> list[str]:
     if criteria["gender"] and (known is None or known[1] != criteria["gender"]):
         broken.append("gender_preference")
     at = _when(slot.get("agenda_date", "") or slot.get("at", ""))
+    if at is not None and criteria.get("deadline") is not None and at > criteria["deadline"]:
+        broken.append("deadline")  # never relaxed: an offer past the deadline is refused
+    if at is not None and criteria.get("earliest") is not None and at < criteria["earliest"]:
+        broken.append("earliest")
     if at is not None:
         at = at.astimezone(_MILANO)
         day = (slot.get("agenda_day") or slot.get("day") or _WEEKDAY[at.weekday()]).lower()[:3]

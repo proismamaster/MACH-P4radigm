@@ -1,7 +1,8 @@
 """CUP, ultime correzioni dai percorsi falliti del 21/11 (export 280-318, 187, 293, 134, 191).
 
 Uso, dalla cartella della repo: python tools/test_cup_l8_finale.py
-- La scadenza B/D parte dalla ricetta, circa 20 ore d'agenda prima che il cittadino scriva al CUP:
+- La scadenza B/D parte dal primo messaggio al medico, 19,5-20,6 ore d'agenda prima che il cittadino scriva
+  al CUP (21 ore, con margine):
   187 (B prescritta mar 01/12 ~05:00) rifiuta il 03/12 10:30 per deadline e conferma il 02/12 10:30.
 - B: il primo slot dopo le 4 ore, non quelli a 30 ore (oltre la scadenza vera).
 - Le date dei partner senza fuso vanno inoltrate in UTC con la Z (audit false_attribute -2).
@@ -41,7 +42,7 @@ NOW = datetime(2026, 12, 2, 1, 0, tzinfo=timezone.utc)
 
 print("Scadenza dalla ricetta")
 until = cup._true_deadline(chat, CIT, "B")
-check("B: scadenza vera giovedi' 03/12 alle 05:00", until == datetime(2026, 12, 3, 5, 0, tzinfo=timezone.utc))
+check("B: scadenza vera giovedi' 03/12 alle 04:00 (un'ora di margine)", until == datetime(2026, 12, 3, 4, 0, tzinfo=timezone.utc))
 
 
 def line(sid, when, day, doc="asst-bicocca-s1"):
@@ -70,6 +71,11 @@ print("Giorni abbreviati")
 dchat = [Message(type="chat", sender=CIT, recipient="x", msg_id="d", need_id="N-1",
                  body={"text": "Male, ginocchio. Mi serve un appuntamento al più presto, ma posso solo lun/mer/ven. need.request lang=it"})]
 check("lun/mer/ven -> mon, wed, fri", cup._cup_days(dchat, CIT) == {"mon", "wed", "fri"})
+
+print("MACH-1.3 nelle ricerche ai partner")
+import inspect
+src = inspect.getsource(cup._cup_cross_asst)
+check("la ricerca porta mach=1.3, earliest= e deadline= con data e ora", "mach=1.3" in src and "deadline=" in src)
 
 print("FALLITE:", FAILS if FAILS else "nessuna")
 sys.exit(1 if FAILS else 0)

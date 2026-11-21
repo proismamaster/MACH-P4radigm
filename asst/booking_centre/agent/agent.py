@@ -424,7 +424,7 @@ def _lead(priority: str | None) -> timedelta:
 # Console 21/11: the citizen writes to the CUP 19-20 real minutes (agenda hours) after the GP's
 # prescription, and its B/D deadline counts from the prescription (187: B prescribed Tue 01/12 ~05:00,
 # 03/12 10:30 refused for deadline, 02/12 10:30 confirmed). Our window started when WE answered.
-_TO_CUP = timedelta(hours=20)
+_TO_CUP = timedelta(hours=21)  # 19.5-20.6 minutes in 17 journeys: one hour of margin
 
 
 def _true_deadline(chat: list[Message], citizen: str, priority: str | None) -> datetime | None:
@@ -1347,6 +1347,9 @@ async def _cup_cross_asst(
         days = _cup_days(chat, citizen)
         days_field = "/".join(day for day in _AGENDA_WEEKDAYS if day in days)
         language, gender = _lang(chat, citizen), _gender(chat, citizen)
+        # MACH-1.3: the asker sets the window with date and time; a 1.2 facility ignores these tokens.
+        until = _true_deadline(chat, citizen, priority)
+        window = f" mach=1.3 earliest={_utc(now + _MIN_LEAD)}" + (f" deadline={_utc(until)}" if until else "")
         for partner in _cup_partner_candidates(found, service, local, language):
             request_id = f"rq-{token_hex(8)}"
             search = f"need.request service_type={service} procedure={procedure} priority={priority} request_id={request_id}"
@@ -1356,6 +1359,7 @@ async def _cup_cross_asst(
                 search += f" gender_preference={gender}"
             if days_field:
                 search += f" days={days_field}"
+            search += window
             if await _cup_send(city, message, cache, partner, search):
                 searches[partner] = request_id
     elif cache.partner_search_started is None:
