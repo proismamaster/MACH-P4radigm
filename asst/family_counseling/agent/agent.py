@@ -1464,16 +1464,15 @@ async def _answer_search(
             # The Ledger answers in a later turn; _resume_searches picks the search up there.
             return
 
-    lines = [line for line in world.splitlines() if "slot_id=" in line]
-    slots, reserved = _facility_slots(
-        lines, now=now, priority=priority, procedure=procedure, me=agent
+    # All pages read so far, so the relaxed alternatives see every slot of the case.
+    slots, _ = _facility_slots(
+        _all_slot_lines(chat, procedure), now=now, priority=priority, procedure=procedure, me=agent
     )
-    want_lang = fields.get("lang", "").lower()
-    want_gender = fields.get("gender_preference") or fields.get("gender") or ""
-    want_gender = want_gender if want_gender in {"m", "f"} else ""
-    slots = [slot for slot in slots if _doctor_fits(slot, want_lang, want_gender)]
-    if slots:
-        offers = [_partner_offer(slot, agent, priority, rid) for slot in slots[:3]]
+    criteria = _criteria(fields)
+    judged = [(slot, _violations(slot, criteria)) for slot in slots]
+    valid = [slot for slot, broken in judged if not broken]
+    if valid:
+        offers = [_partner_offer(slot, agent, priority, rid) for slot in valid[:3]]
         await reply("\n".join(offers))
         return
     page, pages = _page(world)
@@ -1481,5 +1480,87 @@ async def _answer_search(
         if not _asked(chat, agent, procedure, page + 1):
             await _say(city, LEDGER, f"world procedure={procedure} page={page + 1}")
         return
-    reason = "reserved_u" if reserved else "no_slots"
-    await reply(f"cancel request_id={rid} reason={reason} procedure={procedure}")
+    # MACH-1.2, empty answer set: the cancel, then at most three offers that each break exactly
+    # one relaxable criterion, all in one message.
+    lines = [f"cancel reason=no_availability request_id={rid} procedure={procedure}"]
+    lines += [
+        f"{_partner_offer(slot, agent, priority, rid)} relaxed={broken[0]}"
+        for slot, broken in judged
+        if len(broken) == 1 and broken[0] in _RELAXABLE
+    ][:3]
+    await reply("\n".join(lines))
+
+
+# --- MACH-1.2: criteri estesi ------------------------------------------------------------------
+# need.request may carry lang=, gender_preference=m|f, days=tue/thu, after=HH:MM, before=HH:MM
+# (local time of the slot, after <= time < before) and wheelchair=true. Language and
+# accessibility are never relaxed: a doctor who does not speak the language is no alternative.
+
+# Registry: the consultorio is not wheelchair accessible.
+_ACCESSIBLE = False
+_RELAXABLE = ("days", "after", "before", "gender_preference")
+_DAYS = {
+    "mon": "mon", "tue": "tue", "wed": "wed", "thu": "thu", "fri": "fri", "sat": "sat",
+    "sun": "sun", "lun": "mon", "mar": "tue", "mer": "wed", "gio": "thu", "ven": "fri",
+    "sab": "sat", "dom": "sun",
+}
+_WEEKDAY = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+def _clock(value: str) -> tuple[int, int] | None:
+    match = re.fullmatch(r"(\d{1,2})(?::(\d{2}))?", value.strip())
+    if not match or int(match.group(1)) > 23 or int(match.group(2) or 0) > 59:
+        return None
+    return int(match.group(1)), int(match.group(2) or 0)
+
+
+def _criteria(fields: dict[str, str]) -> dict:
+    raw_days = re.split(r"[/,;\s]+", fields.get("days", "").strip("[]").lower())
+    gender = (fields.get("gender_preference") or fields.get("gender") or "").lower()[:1]
+    return {
+        "lang": fields.get("lang", "").lower().strip(),
+        "gender": gender if gender in {"m", "f"} else "",
+        "days": {_DAYS[token[:3]] for token in raw_days if token[:3] in _DAYS},
+        "after": _clock(fields.get("after", "")),
+        "before": _clock(fields.get("before", "")),
+        "wheelchair": fields.get("wheelchair", "").lower() in _TRUE,
+    }
+
+
+def _all_slot_lines(chat: list[Message], procedure: str) -> list[str]:
+    """Every slot line the Ledger returned for ``procedure`` in this case (all pages)."""
+
+    seen: dict[str, str] = {}
+    for row in chat:
+        if row.sender != LEDGER or first_word(row.text) != "slots":
+            continue
+        for line in row.text.splitlines():
+            slot = fields_of(line)
+            if slot.get("slot_id") and slot.get("procedure") in (None, procedure):
+                seen[slot["slot_id"]] = line
+    return list(seen.values())
+
+
+def _violations(slot: dict[str, str], criteria: dict) -> list[str]:
+    """The request criteria this slot breaks (empty: it fits them all)."""
+
+    broken: list[str] = []
+    known = _our_doctor(slot.get("doctor_id", ""))
+    lang = criteria["lang"]
+    if lang and not (known and lang in known[0].split("/")) and not (known is None and lang == "it"):
+        broken.append("lang")
+    if criteria["gender"] and (known is None or known[1] != criteria["gender"]):
+        broken.append("gender_preference")
+    at = _when(slot.get("agenda_date", "") or slot.get("at", ""))
+    if at is not None:
+        day = (slot.get("agenda_day") or slot.get("day") or _WEEKDAY[at.weekday()]).lower()[:3]
+        if criteria["days"] and day not in criteria["days"]:
+            broken.append("days")
+        clock = (at.hour, at.minute)
+        if criteria["after"] is not None and clock < criteria["after"]:
+            broken.append("after")
+        if criteria["before"] is not None and not clock < criteria["before"]:
+            broken.append("before")
+    if criteria["wheelchair"] and not _ACCESSIBLE:
+        broken.append("wheelchair")
+    return broken
