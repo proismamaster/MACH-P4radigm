@@ -391,6 +391,8 @@ async def _facility(
 ) -> None:
     head = first_word(message.text)
     kind = words(message.text)
+    if not (message.sender == LEDGER and head == "held"):
+        await _commit_late_holds(city, message, chat)
     if message.sender.startswith("agent:") and head == "need.request":
         await _answer_partner_search(city, message)
     elif message.sender == LEDGER and head == "held":
@@ -579,7 +581,7 @@ async def _finish_booking(
 
     found = await _await_line(city, message.need_id, chat, "held", f"slot_id={slot}", op="hold")
     if found is None:
-        _LOG.info("care.held.missing", extra={"need_id": (message.need_id or "")[:48]})
+        _LOG.warning("care.held.missing need=%s slot=%s", message.need_id, slot)
         return
     reply, fresh = found
     if first_word(reply.text) == "refused":
@@ -601,6 +603,25 @@ async def _finish_booking(
         return
     if first_word(reply.text) == "refused":
         await _on_refused(city, reply, fresh, hold_self=hold_self)
+
+
+async def _commit_late_holds(city: City, message: Message, chat: list[Message]) -> None:
+    """A held line that came after the confirm turn stopped waiting (Ledger 7-9 min late) never
+    got its commit, and the hold expired (2190006, 3370003, 2620005). Any later turn of the case
+    commits a held hold of ours that has no commit and no refusal yet."""
+    agent = city.agent_id
+    for row in chat:
+        if row.sender != LEDGER or first_word(row.text) != "held":
+            continue
+        hold_id = fields_of(row.text).get("hold_id", "")
+        if not hold_id or _our_commit(chat, agent, hold_id):
+            continue
+        token = f"hold_id={hold_id}"
+        if any(r.sender == LEDGER and first_word(r.text) in {"refused", "committed", "expired"} and token in r.text.split()
+               for r in chat):
+            continue
+        _LOG.warning("care.held.late need=%s hold=%s", message.need_id, hold_id)
+        await _on_held(city, row, chat)
 
 
 async def _on_held(city: City, message: Message, chat: list[Message]) -> None:
