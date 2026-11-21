@@ -324,10 +324,105 @@ async def prova_c() -> None:
     check("ricerca esterna: nessuna offerta diretta a cittadini", not h.out("citizen:", "offer"), h)
 
 
+class LiveWorld(World):
+    """Ledger come in Arena: un secondo commit sullo stesso hold e' rifiutato."""
+
+    def __init__(self, me: str, duplicate: str = "refused commit hold_id={h} code=DUPLICATE") -> None:
+        super().__init__(me)
+        self.committed: set[str] = set()
+        self.duplicate = duplicate
+
+    def answer(self, text: str) -> str | None:
+        words = text.split()
+        f = dict(w.split("=", 1) for w in words[1:] if "=" in w)
+        if words[0] == "commit":
+            hold = f["hold_id"]
+            if hold in self.committed:
+                return self.duplicate.format(h=hold)
+            self.committed.add(hold)
+        return super().answer(text)
+
+
+class LivePort(Port):
+    """Mailbox come in Arena: la risposta del Ledger e' subito nella cronologia del caso
+    e apre anche un turno suo, in parallelo. La cronologia arriva con un po' di ritardo,
+    quindi due turni leggono il caso prima che le scritture dell'altro ci siano."""
+
+    def __init__(self, me: str, harness: "LiveHarness") -> None:
+        super().__init__(me)
+        self.harness = harness
+
+    async def post(self, *, to, message_type, body, need_id, conversation_id, traceparent):
+        mid = await super().post(to=to, message_type=message_type, body=body, need_id=need_id,
+                                 conversation_id=conversation_id, traceparent=traceparent)
+        if to == LEDGER:
+            reply = self.harness.world.answer(body.get("text", ""))
+            if reply is not None:
+                self.harness.spawn(LEDGER, reply, conversation="c-ledger")
+        return mid
+
+    async def history(self, *, peer=None, need_id=None):
+        rows = [r for r in self.log if need_id is None or r.need_id == need_id]
+        await asyncio.sleep(0.02)
+        return rows
+
+
+class LiveHarness(Harness):
+    def __init__(self, cap: str, me: str, world: World) -> None:
+        super().__init__(cap, me, world)
+        self.port = LivePort(me, self)
+        self.mod._PULL_PAUSE = 0.01
+        self.tasks: list[asyncio.Task] = []
+
+    def spawn(self, sender: str, text: str, conversation: str = "c-1") -> None:
+        msg = Message(type="chat", sender=sender, recipient=self.me, msg_id=uuid4().hex,
+                      need_id=self.need, conversation_id=conversation, body={"text": text})
+        self.port.log.append(msg)
+        city = City(index=Index(), messages=self.port, history=self.port, agent_id=self.me,
+                    inbound=msg)
+        self.tasks.append(asyncio.ensure_future(self.mod.main(Need(summary=text, message=msg), city)))
+
+    async def settle(self) -> None:
+        while any(not t.done() for t in self.tasks):
+            await asyncio.gather(*[t for t in self.tasks if not t.done()])
+
+
+async def prova_d() -> None:
+    print("Prova D - doppio commit (percorsi 069 e 099): turno del confirm e turno di held")
+    for label, duplicate in (
+        ("DUPLICATE", "refused commit hold_id={h} code=DUPLICATE"),
+        ("rifiuto senza codice", "refused commit hold_id={h}"),
+    ):
+        h = LiveHarness("hospital.physiatry", HOSP, LiveWorld(HOSP, duplicate))
+        h.spawn(CUP_OWN, CONFIRM)
+        await h.settle()
+        check(f"[{label}] un solo commit per hold", len(h.out(LEDGER, "commit")) == 1, h)
+        check(f"[{label}] una sola ricevuta al CUP", len(h.out(CUP_OWN, "booking.receipt")) == 1, h)
+        check(f"[{label}] nessun cancel al CUP dopo la ricevuta", not h.out(CUP_OWN, "cancel"), h)
+
+    h = LiveHarness("hospital.physiatry", HOSP, LiveWorld(HOSP))
+    h.spawn(CUP_OWN, CONFIRM)
+    h.spawn(CUP_OWN, CONFIRM)  # stessa busta consegnata due volte, due turni in parallelo
+    await h.settle()
+    check("confirm doppio in parallelo: un solo hold e un solo commit",
+          len(h.out(LEDGER, "hold")) == 1 and len(h.out(LEDGER, "commit")) == 1, h)
+    check("confirm doppio in parallelo: una ricevuta, nessun cancel",
+          len(h.out(CUP_OWN, "booking.receipt")) == 1 and not h.out(CUP_OWN, "cancel"), h)
+
+    # Dopo una ricevuta valida un DUPLICATE tardivo del Ledger non annulla la prenotazione.
+    h = Harness("hospital.physiatry", HOSP, World(HOSP))
+    await h.turn(CUP_OWN, CONFIRM)
+    await h.turn(LEDGER, "refused commit hold_id=H-1 code=DUPLICATE")
+    await h.turn(LEDGER, "refused commit hold_id=H-1")
+    check("rifiuto tardivo dopo la ricevuta: nessun cancel",
+          len(h.out(CUP_OWN, "booking.receipt")) == 1 and not h.out(CUP_OWN, "cancel"), h)
+
+
 async def run() -> None:
     await prova_a()
     await prova_b()
     await prova_c()
+    await prova_d()
     print(f"\n{'TUTTO OK' if not FAILS else str(len(FAILS)) + ' FALLITE'}")
     sys.exit(1 if FAILS else 0)
 

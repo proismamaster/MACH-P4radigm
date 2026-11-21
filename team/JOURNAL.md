@@ -1,5 +1,20 @@
 # Journal (la voce più recente in alto)
 
+## 2026-11-21 01:35 — Andrei (Claude) — Ospedale: un solo commit per hold, nessun cancel dopo la ricevuta
+
+**Fatto**
+- Riprodotto 069/099 in `tools/test_facility.py`, prova D: Ledger che mette la risposta subito nella cronologia e apre anche un turno suo, cronologia con 20 ms di ritardo. Sul codice di `main` l'ospedale manda due `commit` per H-1, poi `booking.receipt` e subito `cancel ... reason=facility_cancelled` (stessa sequenza dell'Arena). 7 controlli su 9 falliscono.
+- Causa: il turno del `confirm` (`_finish_booking` -> `_on_held`) e il turno della riga `held` leggono il caso prima che l'altro abbia scritto il `commit`, quindi `_our_commit` è falso in tutti e due. Il secondo `commit` è rifiutato e `_on_refused` manda il cancel.
+- Correzione minima in `asst/hospital/agent/agent.py`: `_claim()` in memoria prima del primo `await` (un `hold` per slot e need, un `commit` per hold, una ricevuta per booking); `_on_refused` non annulla dopo una ricevuta valida né su `DUPLICATE` di un commit. Il file resta solo ospedale.
+- Prove A, B, D verdi 10 volte su 10; C fallisce come atteso (file ridotto). `test_fix.py` verde. `city card validate hospital` ok.
+
+**Problemi**
+- La guardia vale per un processo: con più repliche dello stesso agente due turni potrebbero ancora finire su processi diversi.
+- 099 ha anche 15 `hold` per 15 `confirm`: con questa correzione due confirm uguali in parallelo fanno un solo hold, ma i confirm del 099 erano su offerte diverse. Da riguardare in console dopo il rilascio.
+
+**Prossimo passo**
+- Review e rilascio dell'ospedale (Claude sul PC di Ismail), poi verificare in console un percorso fisiatria con una sola ricevuta e nessun cancel.
+
 ## 2026-11-21 01:45 — Ismail (Opus) — Livello 4: partner dell'anello, alternativa rilassata, rifiuti del cittadino
 
 **Fatto**
