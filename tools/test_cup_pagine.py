@@ -2,7 +2,8 @@
 
 Uso, dalla cartella della repo: python tools/test_cup_pagine.py
 Prima: _MAX_PAGE = 8 e un posto libero sulla pagina 9 non veniva mai chiesto (journey con 79 posti
-effettivi e nessuna offerta). Ora: fino a 20 pagine e circa 60 secondi reali per caso.
+effettivi e nessuna offerta). Ora: fino a 20 pagine e circa 60 secondi reali per caso; dal 21/11 le
+pagine mancanti si chiedono sei alla volta nello stesso turno (il Ledger rispondeva in 7-9 minuti).
 """
 
 import importlib.util
@@ -70,7 +71,9 @@ class PagingTests(unittest.IsolatedAsyncioTestCase):
         mailbox = PagedMailbox("first-valid", total=15, valid_page=3)
         offers = await mailbox.run()
         self.assertEqual([o["slot_id"] for o in offers], ["far-page"])
-        self.assertEqual(max(mailbox.asked), 3, "dopo il primo lotto valido non chiede altre pagine")
+        # 21/11: a Ledger round trip took 7-9 minutes, so the missing pages go out together (six at a time).
+        self.assertEqual(mailbox.asked, list(range(1, 2 + cup._PAGE_BURST)),
+                         "pagina 1, poi le sei mancanti insieme; dopo il primo lotto valido nessun'altra")
 
     async def test_never_more_than_twenty_pages(self):
         mailbox = PagedMailbox("twenty", total=40, valid_page=30)
@@ -82,7 +85,7 @@ class PagingTests(unittest.IsolatedAsyncioTestCase):
         mailbox = PagedMailbox("slow", total=40, valid_page=30, seconds_per_page=25.0)
         offers = await mailbox.run()
         self.assertEqual(offers, [])
-        self.assertLessEqual(max(mailbox.asked), 5, "con 25 s a pagina si ferma dopo circa 60 s")
+        self.assertLessEqual(max(mailbox.asked), 1 + cup._PAGE_BURST, "con 25 s a pagina si ferma dopo circa 60 s")
         self.assertGreaterEqual(max(mailbox.asked), 3)
 
 

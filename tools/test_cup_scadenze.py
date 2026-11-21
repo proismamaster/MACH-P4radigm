@@ -48,6 +48,7 @@ class AgendaDeadlineTests(unittest.IsolatedAsyncioTestCase):
             base.slot("too-late", "h1", "24T09:00", "tue"),
         ])
         offers = await box.offer("lang=en")
+        # Priorita' B: il piu' vicino oltre le 4 ore viene prima (finestra corta).
         self.assertEqual(ids(offers), [("monday", None), ("tuesday", None)])
 
     async def test_d_on_thursday_reaches_next_thursday(self):

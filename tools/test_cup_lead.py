@@ -1,11 +1,11 @@
-"""Le 4 ore di anticipo sono una preferenza, il minimo e' 1 ora; la scadenza si ricontrolla al confirm.
+"""Anticipo degli slot in ore d'agenda: preferiti a 30 ore o piu', minimo 4 ore; scadenza ricontrollata al confirm.
 
 Uso, dalla cartella della repo: python tools/test_cup_lead.py
-Prima il CUP scartava ogni posto libero e compatibile a meno di 4 ore d'agenda (alle 13:00 perdeva un
-h1 inglese libero alle 14:30), teneva un posto di un partner con capacity=0 e confermava un orario
-nel frattempo passato. Ora: i posti a 1-4 ore sono tenuti ma vengono dopo gli altri; sotto 1 ora no
-(hold e commit consumano tempo reale); un partner con capacity=0 e' pieno; al confirm, un orario che
-non e' piu' ad almeno 1 ora d'agenda riceve un cancel e una nuova ricerca, non un confirm.
+Un minuto reale e' un'ora d'agenda e il cittadino risponde dopo 3-27 minuti: gli slot offerti a poche
+ore sono gia' passati quando decide (console 21/11: rifiuti `past`, `EXPIRED` al hold). Ora: si offrono
+per primi gli slot ad almeno 30 ore d'agenda (il weekend non conta), poi quelli ad almeno 4 ore, mai
+quelli sotto le 4 ore; un partner con capacity=0 e' pieno; al confirm, un orario che non e' piu' ad
+almeno 4 ore d'agenda riceve un cancel e una nuova ricerca, non un confirm.
 """
 
 import os
@@ -30,24 +30,32 @@ def line(slot_id, when, day, doc="asst-bicocca-h1"):
             f"at={when} day={day} free=1")
 
 
-NEAR = line("near", "2026-11-23T14:30:00+01:00", "mon")      # tra 1 ora e mezza
+NEAR = line("near", "2026-11-23T14:30:00+01:00", "mon")      # tra 1 ora e mezza: mai
 LATER = line("later", "2026-11-23T18:00:00+01:00", "mon")    # tra 5 ore
-TUE = line("tue", "2026-11-24T10:00:00+01:00", "tue")
+TUE = line("tue", "2026-11-24T10:00:00+01:00", "tue")        # tra 21 ore
+WED = line("wed", "2026-11-25T10:00:00+01:00", "wed")        # tra 45 ore: preferito
 TOO_NEAR = line("too-near", "2026-11-23T13:30:00+01:00", "mon")  # tra mezz'ora
 
 
 class LeadTests(unittest.TestCase):
-    def test_slot_within_four_hours_is_kept(self):
-        got = cup.fitting([NEAR], now=NOW, priority="B", lang="en")
-        self.assertEqual([s["slot_id"] for s in got], ["near"])
+    def test_slot_closer_than_ten_hours_is_dropped(self):
+        got = cup.fitting([NEAR, TOO_NEAR, LATER, TUE], now=NOW, priority="D", lang="en")
+        self.assertEqual([s["slot_id"] for s in got], ["tue"])
 
-    def test_four_hours_are_a_preference_not_a_filter(self):
-        got = cup.fitting([NEAR, TUE, LATER], now=NOW, priority="B", lang="en")
-        self.assertEqual([s["slot_id"] for s in got], ["later", "tue", "near"])
+    def test_slots_thirty_hours_ahead_come_first(self):
+        got = cup.fitting([LATER, TUE, WED], now=NOW, priority="D", lang="en")
+        self.assertEqual([s["slot_id"] for s in got], ["wed", "tue"])
 
-    def test_less_than_one_hour_is_dropped(self):
-        got = cup.fitting([TOO_NEAR, LATER], now=NOW, priority="B", lang="en")
+    def test_urgent_keeps_four_hours(self):
+        got = cup.fitting([LATER, TUE], now=NOW, priority="U", lang="en")
         self.assertEqual([s["slot_id"] for s in got], ["later"])
+
+    def test_the_weekend_does_not_count_as_agenda_time(self):
+        fri = datetime(2026, 11, 20, 17, 0, tzinfo=TZ)  # venerdi' 17:00
+        mon = line("mon", "2026-11-23T10:30:00+01:00", "mon")   # 17 ore e mezza d'agenda
+        tue = line("tue", "2026-11-24T10:30:00+01:00", "tue")   # 41 ore e mezza
+        got = cup.fitting([mon, tue], now=fri, priority="D", lang="en")
+        self.assertEqual([s["slot_id"] for s in got], ["tue", "mon"])
 
     def test_partner_slots_follow_the_same_rule_and_capacity_zero_is_full(self):
         partner = "agent:altra/hospital"
@@ -62,6 +70,7 @@ class LeadTests(unittest.TestCase):
             offer("po-near", "P-near", "2026-11-23T14:30:00+01:00", "mon"),
             offer("po-full", "P-full", "2026-11-23T18:00:00+01:00", "mon", "capacity=0"),
             offer("po-free", "P-free", "2026-11-24T10:00:00+01:00", "tue", "capacity=1"),
+            offer("po-far", "P-far", "2026-11-25T10:00:00+01:00", "wed", "capacity=1"),
         ])
         chat = [
             Message(type="chat", sender=citizen, recipient="agent:noi/cup", msg_id="m1", need_id="N-1",
@@ -71,8 +80,8 @@ class LeadTests(unittest.TestCase):
         ]
         slots, _ = cup._cup_partner_slots(chat, {partner: "rq-1"}, "VIS-FIS", "B", NOW, citizen, set())
         self.assertNotIn("P-full", [s["slot_id"] for s in slots], "capacity=0: il posto e' pieno")
-        self.assertEqual([s["slot_id"] for s in slots], ["P-free", "P-near"],
-                         "le 4 ore sono una preferenza anche per i partner: P-near dopo gli altri")
+        self.assertEqual([s["slot_id"] for s in slots], ["P-free", "P-far"],
+                         "priorita' B: il piu' vicino oltre le 4 ore prima; P-near (1 ora e mezza) mai")
 
 
 class ConfirmDeadlineTests(unittest.IsolatedAsyncioTestCase):

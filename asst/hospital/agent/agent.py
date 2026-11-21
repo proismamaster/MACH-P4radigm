@@ -24,6 +24,11 @@ _MAX_PAGE = 8
 # Four agenda hours is about half a minute of real time at 480x, so a slot is still
 # ahead when the citizen decides. One hour was already past by then.
 _LEAD = timedelta(hours=4)
+# The citizen answers an offer 3-20 real minutes later, i.e. 3-27 AGENDA hours (1 real minute = 1
+# agenda hour): a slot a few hours away is already past when the confirm arrives (EXPIRED,
+# reason=past; 59 confirms out of 61 without a receipt, PROBLEMS 04:25). Slots at least this far
+# ahead go first; the nearer ones stay at the end of the list as a fallback.
+_DECISION_LEAD = timedelta(hours=24)
 # Doctor key (the last segment of doctor_id) -> languages, gender, days. ``*`` is the ASST's
 # rare language. The Ledger's slot line names the doctor; it does not repeat this table.
 _DOCTORS: dict[str, tuple[frozenset[str], str, frozenset[str]]] = {
@@ -1250,9 +1255,23 @@ def _team_of(agent_id: str) -> str:
     return head.split("/", 1)[0] if "/" in head else ""
 
 
+# Our five agents (console, AI.md). The city's ids carry no team segment (agent:<id>), so the team
+# cannot be read from the id: with only _team_of every booking centre looked like ours, the
+# cross_asst consent of another ASST was ignored and P2 was never applied (Prova J).
+_OUR_AGENTS = frozenset({
+    "agent:ez8cb7j167p2",  # booking_centre
+    "agent:rng5wcrzvhsj",  # gp
+    "agent:bb01ggxymm05",  # hospital
+    "agent:sh35cbsy287d",  # specialist
+    "agent:nkh372rd16yq",  # family_counseling
+})
+
+
 def _other_asst(sender: str, me: str) -> bool:
     theirs, ours = _team_of(sender), _team_of(me)
-    return bool(theirs and ours and theirs != ours)
+    if theirs and ours:
+        return theirs != ours
+    return sender.startswith("agent:") and sender != me and sender not in _OUR_AGENTS
 
 
 def _same_agent(a: str, b: str) -> bool:
@@ -1450,7 +1469,10 @@ def _facility_slots(
             reserved += 1
             continue
         chosen.append((at, slot))
-    chosen.sort(key=lambda item: (item[0], item[1].get("slot_id", "")))
+    # B and U windows are short (the deadline counts from the citizen's first message to the GP,
+    # ~20 agenda hours before the booking centre writes): the soonest slot past the minimum first.
+    decided = None if now is None or priority in ("U", "B") else now + _DECISION_LEAD
+    chosen.sort(key=lambda item: (decided is not None and item[0] < decided, item[0], item[1].get("slot_id", "")))
     return [slot for _, slot in chosen], reserved
 
 
@@ -1496,6 +1518,10 @@ def _partner_offer(slot: dict[str, str], me: str, priority: str | None, request_
     if priority:
         parts.append(f"priority={priority}")
     return " ".join(part for part in parts if not part.endswith("="))
+
+
+def _stamp(value: str) -> datetime | None:
+    return _when(value) if "T" in value else None
 
 
 async def _answer_search(
@@ -1566,6 +1592,13 @@ async def _answer_search(
     want_gender = fields.get("gender_preference") or fields.get("gender") or ""
     want_gender = want_gender if want_gender in {"m", "f"} else ""
     slots = [slot for slot in slots if _doctor_fits(slot, want_lang, want_gender)]
+    # MACH-1.3: the asker's window with date and time; a slot outside it would be refused.
+    earliest, deadline = _stamp(fields.get("earliest", "") or fields.get("after", "")), _stamp(fields.get("deadline", ""))
+    slots = [
+        slot for slot in slots
+        if (at := _when(slot.get("at", "") or slot.get("agenda_date", ""))) is None
+        or ((earliest is None or at >= earliest) and (deadline is None or at <= deadline))
+    ]
     if slots:
         offers = [_partner_offer(slot, agent, priority, rid) for slot in slots[:3]]
         await reply("\n".join(offers))
@@ -1575,7 +1608,7 @@ async def _answer_search(
         if not _asked(chat, agent, procedure, page + 1):
             await _say(city, LEDGER, f"world procedure={procedure} page={page + 1}")
         return
-    reason = "reserved_u" if reserved else "no_slots"
+    reason = "reserved_u" if reserved else "no_availability"  # MACH-1.2/1.3 code
     await reply(f"cancel request_id={rid} reason={reason} procedure={procedure}")
 
 

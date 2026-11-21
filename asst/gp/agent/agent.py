@@ -18,6 +18,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
+from time import monotonic
 
 from city_sdk.city import LEDGER, CapError, City, Message, Need, OutOfScope, clinical, understood
 
@@ -47,6 +48,12 @@ _RED_FLAGS = (
     "loss of strength in the legs",
     "dolore al petto",
     "chest pain",
+    # Level 8 hides the red flag in free text: the same two protocol flags, written differently.
+    "dolori al petto", "dolore toracico", "male al petto", "fitta al petto", "oppressione al petto",
+    "pain in my chest", "chest hurts", "chest pains", "chest tightness",
+    "forza alle gambe", "forza nelle gambe", "debolezza alle gambe", "debolezza nelle gambe",
+    "gambe deboli", "non sento le gambe", "non sento più le gambe",
+    "strength in my legs", "weakness in my legs", "legs are weak", "legs feel weak", "legs gave out",
 )
 _DEADLINE_DAYS = {"B": 2, "D": 5}
 _GP_FIELD = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}")
@@ -397,20 +404,54 @@ def _gp_world_red_flags(chat: list[Message]) -> set[str]:
     return flags
 
 
+def _flag_in(flag: str, text: str) -> bool:
+    """The world's red flag in the citizen's words: the phrase, or two thirds of its words (by their
+    first five letters) in any order ("ho perso forza nelle gambe" for "perdita di forza alle gambe")."""
+    if flag in text:
+        return True
+    stems = [word[:5] for word in re.findall(r"[a-zà-ù]+", flag) if len(word) >= 5]
+    have = {word[:5] for word in re.findall(r"[a-zà-ù]+", text) if len(word) >= 5}
+    return len(stems) >= 2 and sum(stem in have for stem in stems) * 3 >= len(stems) * 2
+
+
 def _gp_world_emergency(chat: list[Message], citizen: str) -> bool:
     flags = _gp_world_red_flags(chat)
     return bool(flags) and any(
-        row.sender == citizen and any(flag in row.text.lower() for flag in flags) for row in chat
+        row.sender == citizen and any(_flag_in(flag, row.text.lower()) for flag in flags) for row in chat
     )
 
 
 def _gp_world_received(chat: list[Message]) -> bool:
-    return any(
-        row.sender == LEDGER
-        and (first_word(row.text) in {"world", "slots", "catalogue", "protocol", "protocols"}
-             or isinstance(row.body.get("protocols"), list))
-        for row in chat
+    return any(_gp_is_world(row) for row in chat)
+
+
+def _gp_is_world(row: Message) -> bool:
+    return row.sender == LEDGER and (
+        first_word(row.text) in {"world", "slots", "catalogue", "protocol", "protocols"}
+        or isinstance(row.body.get("protocols"), list)
     )
+
+
+# Console 21/11 04:18-05:12: 84 world replies out of 84 were a slot page with no protocol table and no
+# red flag, and the Ledger answered 7-9 real minutes after the request: waiting for world before every
+# prescription cost each citizen a Ledger round trip (agenda hours of its B window). The world is the same
+# for the whole wave, so one reading serves every citizen of that wave for ten minutes.
+_WORLD_SECONDS = 600
+_WORLD: dict[str, tuple[list[Message], float]] = {}
+
+
+def _gp_shared_world(chat: list[Message], citizen: str) -> list[Message]:
+    """Remember this case's world for its wave; without one, put the wave's recent world before the chat."""
+    wave = citizen.removeprefix("citizen:").split("-", 1)[0]
+    own = [row for row in chat if _gp_is_world(row)
+           and fields_of(row.text.splitlines()[0] if row.text else "").get("wave_id") == wave]
+    if own:
+        _WORLD[wave] = (own, monotonic())
+        return chat
+    if _gp_world_received(chat) or wave not in _WORLD:
+        return chat
+    rows, read = _WORLD[wave]
+    return [*rows, *chat] if monotonic() - read <= _WORLD_SECONDS else chat
 
 
 def _gp_ledger_rx(chat: list[Message], number: str, *, heads: set[str]) -> Message | None:
@@ -465,6 +506,7 @@ async def _gp(city: City, message: Message, chat: list[Message], *, urgent: bool
     citizen = next((row.sender for row in chat if row.sender.startswith("citizen:")), None)
     if citizen is None or message.sender not in {citizen, LEDGER}:
         return
+    chat = _gp_shared_world(chat, citizen)
     agent = city.agent_id
     if _we(chat, agent, "escalate.emergency", to=citizen, word="escalate.emergency"):
         return
@@ -500,7 +542,7 @@ async def _gp(city: City, message: Message, chat: list[Message], *, urgent: bool
         protocol = await _gp_select_protocol(city, message, chat, citizen, code, renewal)
         # Level 8 hides red flags: the protocol table in world lists them per symptom.
         try:
-            fresh = _gp_case(await city.history(need_id=message.need_id), message)
+            fresh = _gp_shared_world(_gp_case(await city.history(need_id=message.need_id), message), citizen)
         except CapError:
             fresh = chat
         if not renewal and _gp_world_emergency(fresh, citizen):
@@ -609,9 +651,11 @@ async def _gp_select_protocol(
     if not _gp_world_received(chat):
         if not _exact(chat, city.agent_id, "world") and not await _gp_send(city, message, LEDGER, "world"):
             return None
-        fresh = await _until(city, message.need_id, chat, _gp_world_received, max_polls=8)
+        fresh = await _until(city, message.need_id, chat, _gp_world_received, max_polls=24)
         chat = _gp_case(fresh, message)
     if not _gp_world_received(chat):
+        # Never prescribe before reading world: level 8 hides red flags in its protocol table. The
+        # wait is 6 s (was 2 s: a slow world left the GP silent, 201); the world's own turn resumes.
         return None
     # The local SDK's world can explicitly answer with slots and no protocol table.
     return _gp_protocols(chat).get(code) or _PROTOCOLS.get(code)
