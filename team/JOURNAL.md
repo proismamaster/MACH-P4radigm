@@ -1,5 +1,20 @@
 # Journal (la voce più recente in alto)
 
+## 2026-11-21 04:32 — Andrei (Claude) — Ospedale: prima gli slot ad almeno 24 ore d'agenda
+
+**Fatto**
+- Dalla causa trovata da Hapca (PROBLEMS 04:25: il cittadino decide dopo 3-27 ore d'agenda, lo slot è già passato): nelle offerte dell'ospedale ai CUP prima gli slot ad almeno 24 ore d'agenda (`_DECISION_LEAD`), i vicini in coda (mai una lista più vuota di prima). U invariata. Vale anche per la riprenotazione del livello 6.
+- Test: prova K (fallisce su main). Ospedale TUTTO OK.
+- **Il CUP e il consultorio hanno bisogno della stessa cosa** (CUP: `_LEAD`/`_MIN_LEAD` in `fitting` e nelle offerte dei partner; consultorio: `_LEAD`). Hapca o io, prima delle 05:30.
+
+## 2026-11-21 04:40 — Andrei (Claude) — Ospedale: P2 con gli ID veri; follow-up dello specialist in sospeso
+
+**Fatto**
+- `_other_asst` cercava la squadra nell'id (`agent:<team>/<slug>`); gli ID della città non ce l'hanno (`agent:ez8cb7j167p2`), quindi era sempre falso. Per i CUP di altre ASST: `cross_asst_consent_ref` ignorato (hold col consenso sbagliato, `CONSENT_MISSING` con P2 attiva) e nessun blocco senza consenso cross. Ora, se l'id non ha la squadra, è "altra ASST" ogni agente che non è uno dei nostri cinque (`_OUR_AGENTS`, ID fissi di AI.md).
+- Test: prova J in `tools/test_facility.py` (2 controlli falliscono su main, il controllo col nostro CUP passa). Ospedale TUTTO OK; test_l8_ostili e test_fix verdi.
+- Il consultorio ha lo stesso `_other_asst` (Hapca).
+- Follow-up dello specialist: non implementato. Il kit dice solo "lo decide lo specialista quando il percorso lo richiede"; nessun verdetto visto lo mostra. Serve un percorso di cardiologia in console con le righe del verdetto dello specialist.
+
 ## 2026-11-21 04:20 — Alberto (Hhapca, con Claude) — Consultorio 1.0.7 e correzioni del CUP in main
 
 **Fatto**

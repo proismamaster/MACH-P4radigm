@@ -645,6 +645,66 @@ async def prova_i() -> None:
           "slot_id=M-1" in body and "slot_id=T-1" not in body and not h.out(CUP_EXT, "cancel"), h)
 
 
+async def prova_j() -> None:
+    """P2 con gli ID veri della città, che non hanno la squadra (agent:<id>, non agent:<team>/<slug>).
+
+    `_other_asst` cercava la squadra nell'id: con gli ID veri era sempre falso. Un CUP di un'altra
+    ASST mandava `cross_asst_consent_ref` e l'ospedale lo ignorava (hold col consenso sbagliato,
+    CONSENT_MISSING con P2 attiva); senza consenso cross e con P2 attiva l'ospedale faceva l'hold."""
+
+    print("Prova J - P2 con gli ID veri (senza squadra nell'id)")
+    me, ours, theirs = "agent:bb01ggxymm05", "agent:ez8cb7j167p2", "agent:h6r1v45esk77"
+    base = (f"confirm offer_id=of-S-1 slot_id=S-1 citizen={CIT} consent_ref=cons-N-booking "
+            f"prescription_number=prescription_number-N-1 facility={me}")
+
+    h = Harness("hospital.physiatry", me, World(me))
+    await h.turn(theirs, base + " cross_asst_consent_ref=cons-N-cross")
+    holds = h.out(LEDGER, "hold")
+    check("CUP di un'altra ASST con cross_asst_consent_ref: hold con il consenso cross",
+          len(holds) == 1 and "consent_ref=cons-N-cross" in holds[0], h)
+
+    h = Harness("hospital.physiatry", me, World(me, rules="rules P2=on"))
+    await h.turn(LEDGER, "rules P2=on")
+    await h.turn(theirs, base)
+    check("P2 attiva, CUP di un'altra ASST senza consenso cross: nessun hold, cancel consent_missing",
+          not h.out(LEDGER, "hold")
+          and any("reason=consent_missing" in t.split() for t in h.out(theirs, "cancel")), h)
+
+    h = Harness("hospital.physiatry", me, World(me, rules="rules P2=on"))
+    await h.turn(LEDGER, "rules P2=on")
+    await h.turn(ours, base)
+    holds = h.out(LEDGER, "hold")
+    check("P2 attiva, il NOSTRO CUP (stessa ASST): hold con il consenso di prenotazione",
+          len(holds) == 1 and "consent_ref=cons-N-booking" in holds[0], h)
+
+
+async def prova_k() -> None:
+    """Il cittadino decide dopo 3-20 minuti reali = 3-27 ORE d'agenda (PROBLEMS, 04:25): uno slot a
+    poche ore e' gia' passato quando conferma (EXPIRED, reason=past, 59 confirm su 61 senza ricevuta).
+    Prima gli slot ad almeno 24 ore d'agenda, i vicini in coda; U (stesso giorno) come prima."""
+
+    print("Prova K - prima gli slot ad almeno 24 ore d'agenda (il cittadino decide dopo ore)")
+    rows = [
+        "slot_id=N-1 doctor_id=D-x1 facility=ME procedure=VIS-FIS at=2026-11-23T13:00:00+01:00 day=mon free=1",
+        "slot_id=N-2 doctor_id=D-x1 facility=ME procedure=VIS-FIS at=2026-11-23T16:00:00+01:00 day=mon free=1",
+        "slot_id=F-1 doctor_id=D-x1 facility=ME procedure=VIS-FIS at=2026-11-24T10:00:00+01:00 day=tue free=1",
+        "slot_id=F-2 doctor_id=D-x2 facility=ME procedure=VIS-FIS at=2026-11-24T15:00:00+01:00 day=tue free=1",
+    ]
+    h = Harness("hospital.physiatry", HOSP, World(HOSP, {"VIS-FIS:1": slots_reply(HOSP, rows)}))
+    await h.turn(CUP_EXT, SEARCH)
+    offers = h.out(CUP_EXT, "offer")
+    order = [w.split("=", 1)[1] for line in (offers[0].splitlines() if offers else [])
+             for w in line.split() if w.startswith("slot_id=")]
+    check("B di lunedi' 08:00: prima martedi' (F-1, F-2, oltre 24 ore), poi il vicino N-1",
+          order == ["F-1", "F-2", "N-1"], h, )
+
+    h = Harness("hospital.physiatry", HOSP, World(HOSP, {"VIS-FIS:1": slots_reply(HOSP, rows)}))
+    await h.turn(CUP_EXT, SEARCH.replace("priority=B", "priority=U"))
+    body = " ".join(h.out(CUP_EXT, "offer"))
+    check("U (stesso giorno): offre gli slot di oggi come prima",
+          "slot_id=N-1" in body and "slot_id=F-1" not in body, h)
+
+
 async def run() -> None:
     # Ogni agente ha le sue prove: A, B, D, F, G e I provano l'ospedale, C il consultorio; E e H valgono per tutti.
     if "family_counseling" in os.path.normpath(AGENT_FILE).split(os.sep):
@@ -656,6 +716,8 @@ async def run() -> None:
         await prova_f()
         await prova_g()
         await prova_i()
+        await prova_j()
+        await prova_k()
     await prova_e()
     await prova_h()
     print(f"\n{'TUTTO OK' if not FAILS else str(len(FAILS)) + ' FALLITE'}")
