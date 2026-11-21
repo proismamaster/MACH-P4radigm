@@ -397,7 +397,7 @@ async def _facility(
         await _on_held(city, message, chat)
     elif message.sender == LEDGER and head == "committed":
         await _on_committed(city, message, chat)
-    elif message.sender == LEDGER and head == "refused" and "hold" in kind:
+    elif message.sender == LEDGER and head == "refused" and kind & {"hold", "commit"}:
         await _on_refused(city, message, chat, hold_self=hold_self)
     elif message.sender == LEDGER and head == "checked_in":
         await _on_checked_in(city, message, chat, reports=reports)
@@ -649,30 +649,82 @@ async def _on_committed(city: City, message: Message, chat: list[Message]) -> No
     token = f"booking_id={booking_id}"
     if _we(chat, city.agent_id, token, to=target, word="booking.receipt"):
         return
-    await _say(city, target, f"booking.receipt booking_id={booking_id} ledger_ref={ledger_ref}")
+    line = f"booking.receipt booking_id={booking_id} ledger_ref={ledger_ref}"
+    if slot:
+        # Cross-ASST: the booking centre matches the receipt to its confirm by slot and offer.
+        offer_id = next(
+            (fields_of(row.text).get("offer_id", "") for row in reversed(chat)
+             if row.sender == target and f"slot_id={slot}" in row.text.split() and "confirm" in words(row.text)),
+            "",
+        )
+        line += f" slot_id={slot}" + (f" offer_id={offer_id}" if offer_id else "")
+    await _say(city, target, line)
 
 
 async def _on_refused(
     city: City, message: Message, chat: list[Message], *, hold_self: bool
 ) -> None:
+    """A Ledger refusal cancels the offer it refers to, never the latest one.
+
+    A refusal can arrive late, after a newer hold for the same citizen: match it by its own
+    slot_id or hold_id, keep the Ledger code, and never cancel after a valid receipt."""
     agent = city.agent_id
-    slot = ""
-    for row in chat:
-        if row.sender == agent and row.recipient == LEDGER and "hold" in words(row.text):
-            slot = fields_of(row.text).get("slot_id", slot)
+    refused = fields_of(message.text)
+    code = (refused.get("code") or refused.get("reason") or refused.get("error")
+            or next((t for t in message.text.split() if re.fullmatch(r"[A-Z][A-Z_]{3,}", t)), ""))
+    if "commit" in words(message.text) and (code.upper() == "DUPLICATE" or "DUPLICATE" in message.text.split()):
+        return  # the hold is already committed: the booking stands
+    slot = refused.get("slot_id") or _hold_slot(chat, agent, refused.get("hold_id", ""))
+    if not slot and not (refused.get("slot_id") or refused.get("hold_id")):
+        for row in chat:  # no identifier at all: the only hold we can mean is the last one
+            if row.sender == agent and row.recipient == LEDGER and first_word(row.text) == "hold":
+                slot = fields_of(row.text).get("slot_id", slot)
     if not slot:
         return
     target, _, _ = _booking_of(chat, agent, slot)
+    if not target or _receipt_sent(chat, agent, target, slot):
+        return  # never cancel after a valid receipt
     offer_id = ""
     for row in chat:
-        if f"slot_id={slot}" in row.text.split():
+        if row.sender == target and f"slot_id={slot}" in row.text.split() and "confirm" in words(row.text):
             offer_id = fields_of(row.text).get("offer_id", offer_id)
-    if (
-        target
-        and offer_id
-        and not _we(chat, agent, f"offer_id={offer_id}", to=target, word="cancel")
-    ):
-        await _say(city, target, f"cancel offer_id={offer_id} reason=facility_cancelled")
+    if not offer_id:
+        offer_id = _our_offer_for_slot(chat, agent, slot)
+    if not offer_id or _we(chat, agent, f"offer_id={offer_id}", to=target, word="cancel")             or _we(chat, agent, f"offer_id={offer_id}", to=target, word="hold_refused"):
+        return
+    known = {"PRESCRIPTION_EXPIRED", "CONSENT_MISSING", "NO_CAPACITY"}
+    if target.startswith("agent:"):
+        # MACH-1.2 towards a booking centre: lower-case reason for the three known codes.
+        if code in known:
+            line = f"cancel offer_id={offer_id} slot_id={slot} reason={code.lower()}"
+        elif code:
+            line = f"hold_refused offer_id={offer_id} slot_id={slot} ledger_code={code}"
+        else:
+            line = f"cancel offer_id={offer_id} slot_id={slot} reason=facility_cancelled"
+    else:
+        line = f"cancel offer_id={offer_id} slot_id={slot} reason={code or 'facility_cancelled'}"
+    await _say(city, target, line)
+
+
+def _receipt_sent(chat: list[Message], agent: str, target: str, slot: str) -> bool:
+    """A booking.receipt already went to ``target`` for this slot. Receipts to a citizen may carry no
+    slot_id (older ones), so any receipt to the citizen after its confirm for this slot counts."""
+    confirmed = False
+    for row in chat:
+        if row.sender == target and f"slot_id={slot}" in row.text.split() and "confirm" in words(row.text):
+            confirmed = True
+        if row.sender == agent and row.recipient == target and first_word(row.text) == "booking.receipt":
+            if f"slot_id={slot}" in row.text.split() or (confirmed and target.startswith("citizen:")):
+                return True
+    return False
+
+
+def _our_offer_for_slot(chat: list[Message], agent: str, slot: str) -> str:
+    offer_id = ""
+    for row in chat:
+        if row.sender == agent and f"slot_id={slot}" in row.text.split():
+            offer_id = fields_of(row.text).get("offer_id", offer_id)
+    return offer_id
 
 
 async def _on_checkin(city: City, message: Message, chat: list[Message], *, reports: bool) -> None:
