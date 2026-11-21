@@ -1060,6 +1060,101 @@ async def prova_r() -> None:
           any("booking_id=H-5" in t.split() for t in h.out(LEDGER, "checkin")) and len(h.out(CIT, "checkin")) == 1, h)
 
 
+class OnceFailingPort(Port):
+    """Il primo invio che comincia con ``head`` riceve un 5xx dal Relay, i successivi passano."""
+
+    def __init__(self, me: str, head: str) -> None:
+        super().__init__(me)
+        self.head, self.failed = head, False
+
+    async def post(self, *, to, message_type, body, need_id, conversation_id, traceparent):
+        if not self.failed and body.get("text", "").startswith(self.head + " "):
+            self.failed = True
+            raise CapError("UPSTREAM_TIMEOUT", self.head)
+        return await super().post(to=to, message_type=message_type, body=body, need_id=need_id,
+                                  conversation_id=conversation_id, traceparent=traceparent)
+
+
+async def prova_s() -> None:
+    """Ospedale: punti persi sulle prenotazioni dei partner e sul check-in.
+
+    (1) Le righe vere del world (/v1/team/world) dicono `capacity=`, non `free=`: l'ospedale offriva anche
+    slot pieni, il cittadino dell'altra ASST confermava e prendeva NO_CAPACITY. (2) Tre offerte a un CUP
+    partner, spesso dello stesso medico e dello stesso giorno: il cittadino ha preferenze nascoste di genere
+    e di giorno e risponde una volta. Fino a 5, con generi e giorni diversi. (3) P2: le regole lette in un
+    altro caso valgono anche qui; prima un confirm cross-ASST aspettava 6 s la risposta a `rules` e poi
+    faceva l'hold senza consenso cross (CONSENT_MISSING). (4) Check-in con un 5xx del Relay: riprova una volta."""
+
+    print("Prova S - capacity, offerte varie ai partner, P2 ricordata, check-in ritentato")
+    rows = [
+        "slot_id=Z-0 doctor_id=asst-bicocca-h1 facility=ME procedure=VIS-FIS agenda_date=2026-11-24T09:00:00+01:00 agenda_day=tue capacity=0",
+        "slot_id=Z-1 doctor_id=asst-bicocca-h1 facility=ME procedure=VIS-FIS agenda_date=2026-11-24T09:30:00+01:00 agenda_day=tue capacity=1",
+        "slot_id=Z-2 doctor_id=asst-bicocca-h1 facility=ME procedure=VIS-FIS agenda_date=2026-11-24T10:00:00+01:00 agenda_day=tue capacity=1",
+        "slot_id=Z-3 doctor_id=asst-bicocca-h1 facility=ME procedure=VIS-FIS agenda_date=2026-11-24T10:30:00+01:00 agenda_day=tue capacity=1",
+        "slot_id=Z-4 doctor_id=asst-bicocca-h2 facility=ME procedure=VIS-FIS agenda_date=2026-11-25T09:00:00+01:00 agenda_day=wed capacity=1",
+        "slot_id=Z-5 doctor_id=asst-bicocca-h1 facility=ME procedure=VIS-FIS agenda_date=2026-11-25T11:00:00+01:00 agenda_day=wed capacity=1",
+        "slot_id=Z-6 doctor_id=asst-bicocca-h1 facility=ME procedure=VIS-FIS agenda_date=2026-11-24T11:00:00+01:00 agenda_day=tue capacity=1",
+    ]
+    search = SEARCH.replace("priority=B", "priority=D").replace("rq-T1", "rq-S1")
+    h = Harness("hospital.physiatry", HOSP, World(HOSP, {"VIS-FIS:1": slots_reply(HOSP, rows)}))
+    await h.turn(CUP_EXT, search)
+    lines = [line for t in h.out(CUP_EXT, "offer") for line in t.splitlines() if line.startswith("offer ")]
+    ids = [w.split("=", 1)[1] for line in lines for w in line.split() if w.startswith("slot_id=")]
+    check("slot con capacity=0 mai offerto a un CUP partner", ids and "Z-0" not in ids, h)
+    genders = {w.split("=", 1)[1] for line in lines for w in line.split() if w.startswith("doctor_gender=")}
+    days = {w.split("=", 1)[1] for line in lines for w in line.split() if w.startswith("agenda_day=")}
+    check("fino a 5 offerte, con entrambi i generi e piu' giorni", 3 < len(ids) <= 5 and genders == {"f", "m"} and len(days) > 1, h)
+
+    me, theirs = "agent:bb01ggxymm05", "agent:h6r1v45esk77"
+    h = Harness("hospital.physiatry", me, Silent(me), need="N-2026-11-21-00S1")
+    await h.turn(LEDGER, "rules P2=on")
+    h.need = "N-2026-11-21-00S2"
+    await h.turn(theirs, f"confirm offer_id=of-S-1 slot_id=S-1 citizen={CIT} consent_ref=cons-N-booking facility={me}")
+    check("P2 letta in un altro caso: confirm cross-ASST senza consenso cross, nessun hold, cancel consent_missing subito",
+          not h.out(LEDGER, "hold") and any("reason=consent_missing" in t.split() for t in h.out(theirs, "cancel")), h)
+
+    h = Harness("hospital.physiatry", HOSP, World(HOSP))
+    h.port = OnceFailingPort(HOSP, "checkin")
+    await h.turn(CIT, "checkin booking_id=BK-9 ledger_ref=LR-9")
+    check("check-in con un 5xx del Relay al primo invio: riprovato, checkin al Ledger e conferma al cittadino",
+          len(h.out(LEDGER, "checkin")) == 1 and len(h.out(CIT, "checkin")) == 1, h)
+
+
+async def prova_t() -> None:
+    """Ospedale: confirm e ricerche dei partner in formati che restavano senza risposta.
+
+    (1) MACH: il consenso arriva come `cross_asst_consent_ref` senza `consent_ref`; (2) nessun consenso o
+    un'offerta sconosciuta: l'ospedale usciva in silenzio (il CUP partner aspetta, review -1 per passivita');
+    ora risponde cancel con il motivo. (3) Ricerca hospital.physiatry senza procedure=: l'ospedale fa solo
+    VIS-FIS, quindi offre invece di rispondere procedure_missing."""
+
+    print("Prova T - confirm e ricerche dei partner senza silenzi")
+    me, theirs = "agent:bb01ggxymm05", "agent:h6r1v45esk77"
+    h = Harness("hospital.physiatry", me, World(me))
+    await h.turn(theirs, f"confirm offer_id=of-S-1 slot_id=S-1 citizen={CIT} cross_asst_consent_ref=cons-X facility={me}")
+    holds = h.out(LEDGER, "hold")
+    check("solo cross_asst_consent_ref: hold con quel consenso", len(holds) == 1 and "consent_ref=cons-X" in holds[0].split(), h)
+
+    h = Harness("hospital.physiatry", me, World(me))
+    await h.turn(theirs, f"confirm offer_id=of-S-1 slot_id=S-1 citizen={CIT} facility={me}")
+    back = h.out(theirs, "cancel")
+    check("confirm senza nessun consenso: nessun hold, cancel reason=consent_missing al CUP",
+          not h.out(LEDGER, "hold") and len(back) == 1 and "reason=consent_missing" in back[0].split()
+          and "offer_id=of-S-1" in back[0].split(), h)
+
+    h = Harness("hospital.physiatry", me, World(me))
+    await h.turn(theirs, f"confirm offer_id=of-boh-7 citizen={CIT} consent_ref=cons-N-booking")
+    back = h.out(theirs, "cancel")
+    check("confirm di un'offerta sconosciuta senza slot_id: cancel con offer_id e motivo, nessun hold",
+          not h.out(LEDGER, "hold") and len(back) == 1 and "offer_id=of-boh-7" in back[0].split(), h)
+
+    h = Harness("hospital.physiatry", HOSP, World(HOSP, {"VIS-FIS:1": slots_reply(HOSP, ROWS)}))
+    await h.turn(CUP_EXT, "need.request service_type=hospital.physiatry priority=D request_id=rq-T9")
+    check("ricerca hospital.physiatry senza procedure=: offerte VIS-FIS, non procedure_missing",
+          any("request_id=rq-T9" in t for t in h.out(CUP_EXT, "offer"))
+          and not any("procedure_missing" in t for t in h.out(CUP_EXT)), h)
+
+
 async def run() -> None:
     # Ogni agente ha le sue prove: A, B, D, F, G, I-N e P provano l'ospedale, C e O il consultorio; E e H valgono per tutti.
     if "family_counseling" in os.path.normpath(AGENT_FILE).split(os.sep):
@@ -1080,6 +1175,8 @@ async def run() -> None:
         await prova_p()
         await prova_q()
         await prova_r()
+        await prova_s()
+        await prova_t()
     await prova_e()
     await prova_h()
     print(f"\n{'TUTTO OK' if not FAILS else str(len(FAILS)) + ' FALLITE'}")

@@ -441,7 +441,8 @@ def fitting(
             continue
         if facility and slot.get("facility") != facility:
             continue
-        free = slot.get("free")
+        # The live world says capacity= (/v1/team/world); older pages and the tests say free=.
+        free = slot.get("free", slot.get("capacity"))
         if free is not None and free.isdigit() and int(free) <= 0:
             continue
         reserve = slot.get("urgent_reserve", "").lower() == "true"
@@ -704,6 +705,8 @@ def _remember_reads(chat: list[Message]) -> None:
         head = first_word(row.text)
         if head == "agenda" and "agenda_now=" in row.text:
             key = "agenda"
+        elif head == "rules":
+            key = "rules"  # the rules are the wave's, the same for every case
         elif head == "slots" and _page(row.text)[0] == 1:
             procs = {fields_of(line).get("procedure") for line in row.text.splitlines() if "slot_id=" in line} - {None}
             if len(procs) != 1:
@@ -968,11 +971,21 @@ async def _on_confirm(
     agent = city.agent_id
     fields = fields_of(message.text)
     offer_id = fields.get("offer_id", "")
-    consent = fields.get("consent_ref", "")
+    # MACH-1.x booking centres may send the consent only as cross_asst_consent_ref (or our cross_consent_ref).
+    consent = (fields.get("consent_ref") or fields.get("cross_asst_consent_ref")
+               or fields.get("cross_consent_ref", ""))
     offer = _our_offer(chat, agent, offer_id) if offer_id else {}
     slot = fields.get("slot_id") or offer.get("slot_id", "")
     facility = fields.get("facility") or offer.get("facility", "")
     if not slot or not consent:
+        # Before: a silent return, and the booking centre waited for an answer that never came.
+        is_confirm = first_word(message.text) == "confirm" or message.type == "confirm"
+        if message.sender.startswith("agent:") and is_confirm and offer_id and not _we(
+            chat, agent, f"offer_id={offer_id}", to=message.sender, word="cancel"
+        ):
+            reason = "consent_missing" if slot else "offer_unknown"
+            ids = f"offer_id={offer_id}" + (f" slot_id={slot}" if slot else "")
+            await _say(city, message.sender, f"cancel {ids} reason={reason}")
         return
     citizen = fields.get("citizen") or (
         message.sender if message.sender.startswith("citizen:") else ""
@@ -1350,9 +1363,13 @@ async def _fresh_rules(city: City, message: Message, chat: list[Message]) -> lis
         return sum(1 for row in rows if row.sender == LEDGER and first_word(row.text) == "rules")
 
     known = count(chat)
+    remembered = _LEDGER_READS.get("rules")  # the wave's rules, read in any case: a fallback, never the answer
     if not await _say(city, LEDGER, "rules"):
-        return chat
-    return await _until(city, message.need_id, chat, lambda rows: count(rows) > known)
+        return [remembered[0], *chat] if remembered is not None else chat
+    fresh = await _until(city, message.need_id, chat, lambda rows: count(rows) > known)
+    if count(fresh) <= known and remembered is not None:
+        return [remembered[0], *fresh]  # no answer in the short wait: the rules read in another case
+    return fresh
 
 
 async def _on_refused(
@@ -1425,7 +1442,22 @@ async def _on_checkin(city: City, message: Message, chat: list[Message], *, repo
         return
     token = f"booking_id={booking_id}"
     if not _we(chat, city.agent_id, token, to=LEDGER, word="checkin"):
-        if not await _say(city, LEDGER, f"checkin booking_id={booking_id} citizen={citizen}"):
+        sent = False
+        for attempt in range(2):  # a 5xx under load: one more try (the window is 5 real minutes)
+            try:
+                await city.say(LEDGER, f"checkin booking_id={booking_id} citizen={citizen}")
+                sent = True
+                break
+            except CapError as error:
+                _LOG.warning("care.checkin.failed need=%s code=%s", (message.need_id or "")[:48], error.code)
+                try:
+                    retry = 500 <= error.http_status() < 600
+                except CapError:
+                    retry = False
+                if not retry or attempt:
+                    break
+                await asyncio.sleep(_PULL_PAUSE)
+        if not sent:
             return
     # Patient: the check-in window is half an agenda day (5 real minutes) and the push of checked_in comes
     # 60-90 s after the Ledger's reply is already in the case history.
@@ -1713,7 +1745,8 @@ def _facility_slots(
             continue
         if slot.get("facility") and not _same_agent(slot["facility"], me):
             continue
-        free = slot.get("free")
+        # The live world says capacity= (/v1/team/world); older pages and the tests say free=.
+        free = slot.get("free", slot.get("capacity"))
         if free is not None and free.isdigit() and int(free) <= 0:
             continue
         if earliest is not None and not earliest < at:
@@ -1741,6 +1774,65 @@ _OUR_DOCTORS = {
 
 def _our_doctor(doctor_id: str) -> tuple[str, str] | None:
     return _OUR_DOCTORS.get(doctor_id) or _OUR_DOCTORS.get(f"asst-bicocca-{doctor_id.rsplit('-', 1)[-1]}")
+
+
+# MACH-1.2 search criteria. after= and before= are the local (Milan) time of the slot, after <= time < before;
+# the agenda runs in November-December, when Milan is UTC+1. The language is never relaxed (a doctor who
+# does not speak it is no alternative); the hospital is accessible, so wheelchair=true changes nothing.
+_RELAXABLE = ("days", "after", "before", "gender_preference")
+_MILAN = timezone(timedelta(hours=1))
+_DAY_NAMES = {
+    "mon": "mon", "tue": "tue", "wed": "wed", "thu": "thu", "fri": "fri", "sat": "sat", "sun": "sun",
+    "lun": "mon", "mar": "tue", "mer": "wed", "gio": "thu", "ven": "fri", "sab": "sat", "dom": "sun",
+}
+_GENDERS = {"f": "f", "female": "f", "donna": "f", "femmina": "f", "m": "m", "male": "m", "uomo": "m", "maschio": "m"}
+_WEEK = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+def _clock(value: str) -> int | None:
+    """Minutes after midnight for HH:MM (or HH), else None."""
+    hours, _, minutes = value.strip().partition(":")
+    if not hours.isdigit() or (minutes and not minutes.isdigit()):
+        return None
+    total = int(hours) * 60 + int(minutes or 0)
+    return total if 0 <= total <= 24 * 60 else None
+
+
+def _criteria(fields: dict[str, str]) -> dict[str, object]:
+    days = {
+        _DAY_NAMES[part.strip().lower()[:3]]
+        for part in re.split(r"[/,;|+ ]", fields.get("days", ""))
+        if part.strip().lower()[:3] in _DAY_NAMES
+    }
+    gender = (fields.get("gender_preference") or fields.get("gender") or "").strip().lower()
+    after, before = fields.get("after", ""), fields.get("before", "")
+    return {
+        "lang": fields.get("lang", "").strip().lower(),
+        "gender": _GENDERS.get(gender, ""),
+        "days": days,
+        "after": None if "T" in after else _clock(after),  # a date-time after= is the MACH-1.3 window
+        "before": None if "T" in before else _clock(before),
+    }
+
+
+def _misses(slot: dict[str, str], want: dict[str, object]) -> list[str]:
+    """The criteria ``slot`` does not meet: lang, gender_preference, days, after, before."""
+    out: list[str] = []
+    if not _doctor_fits(slot, str(want["lang"]), ""):
+        out.append("lang")
+    if want["gender"] and not _doctor_fits(slot, "", str(want["gender"])):
+        out.append("gender_preference")
+    at = _when(slot.get("at", "") or slot.get("agenda_date", ""))
+    local = at.astimezone(_MILAN) if at is not None else None
+    day = (slot.get("day") or slot.get("agenda_day") or (_WEEK[local.weekday()] if local else "")).lower()
+    if want["days"] and day[:3] not in want["days"]:
+        out.append("days")
+    minute = local.hour * 60 + local.minute if local else None
+    if minute is not None and want["after"] is not None and minute < want["after"]:
+        out.append("after")
+    if minute is not None and want["before"] is not None and minute >= want["before"]:
+        out.append("before")
+    return out
 
 
 def _doctor_fits(slot: dict[str, str], lang: str, gender: str) -> bool:
@@ -1773,6 +1865,36 @@ def _partner_offer(slot: dict[str, str], me: str, priority: str | None, request_
     if priority:
         parts.append(f"priority={priority}")
     return " ".join(part for part in parts if not part.endswith("="))
+
+
+# Up to five offers to a booking centre, the first as ranked and then the ones that add a doctor gender or a
+# weekday: the citizen of the other ASST has hidden gender and day preferences and answers once (our CUP
+# saw all three offers refused for gender or day in 56 of 90 journeys). A message holds at most 2000 chars.
+_PARTNER_OFFERS = 5
+_MAX_TEXT = 2000
+
+
+def _varied(slots: list[dict[str, str]], count: int) -> list[dict[str, str]]:
+    if len(slots) <= count:
+        return list(slots)
+    picked, rest = [slots[0]], list(slots[1:])
+
+    def gender(slot: dict[str, str]) -> str:
+        known = _our_doctor(slot.get("doctor_id", ""))
+        return known[1] if known else ""
+
+    while len(picked) < count and rest:
+        genders = {gender(slot) for slot in picked}
+        days = {slot.get("day") or slot.get("agenda_day") for slot in picked}
+
+        def gain(index: int) -> tuple[int, int]:
+            slot = rest[index]
+            new_gender = bool(gender(slot)) and gender(slot) not in genders
+            new_day = (slot.get("day") or slot.get("agenda_day")) not in days
+            return (3 * new_gender + 2 * new_day, -index)
+
+        picked.append(rest.pop(max(range(len(rest)), key=gain)))
+    return picked
 
 
 def _stamp(value: str) -> datetime | None:
@@ -1810,7 +1932,8 @@ async def _answer_search(
     if service and family and service.split(".", 1)[0] != family:
         await reply(f"cancel request_id={rid} reason=wrong_service service_type={service}")
         return
-    procedure = fields.get("procedure") or ("CONS-GIN" if family == "family_counseling" else "")
+    # Each facility family does one procedure here: a search that names only the service still gets offers.
+    procedure = fields.get("procedure") or {"family_counseling": "CONS-GIN", "hospital": "VIS-FIS"}.get(family, "")
     if not procedure:
         await reply(f"cancel request_id={rid} reason=procedure_missing")
         return
@@ -1847,10 +1970,12 @@ async def _answer_search(
     )
     gone = _gone()  # held by another case, booked or past, as far as this process knows
     slots = [slot for slot in slots if slot.get("slot_id") not in gone]
-    want_lang = fields.get("lang", "").lower()
-    want_gender = fields.get("gender_preference") or fields.get("gender") or ""
-    want_gender = want_gender if want_gender in {"m", "f"} else ""
-    slots = [slot for slot in slots if _doctor_fits(slot, want_lang, want_gender)]
+    want = _criteria(fields)
+    # MACH-1.2: an offer meets every criterion of the citizen; with none, the alternatives that miss one
+    # relaxable criterion go under the cancel (the citizen of the other ASST refuses the rest anyway).
+    misses = {slot["slot_id"]: _misses(slot, want) for slot in slots}
+    near = [slot for slot in slots if len(misses[slot["slot_id"]]) == 1 and misses[slot["slot_id"]][0] in _RELAXABLE]
+    slots = [slot for slot in slots if not misses[slot["slot_id"]]]
     # MACH-1.3: the asker's window with date and time; a slot outside it would be refused.
     earliest, deadline = _stamp(fields.get("earliest", "") or fields.get("after", "")), _stamp(fields.get("deadline", ""))
     slots = [
@@ -1858,8 +1983,17 @@ async def _answer_search(
         if (at := _when(slot.get("at", "") or slot.get("agenda_date", ""))) is None
         or ((earliest is None or at >= earliest) and (deadline is None or at <= deadline))
     ]
+    near = [
+        slot for slot in near
+        if (at := _when(slot.get("at", "") or slot.get("agenda_date", ""))) is None
+        or ((earliest is None or at >= earliest) and (deadline is None or at <= deadline))
+    ]
     if slots:
-        offers = [_partner_offer(slot, agent, priority, rid) for slot in slots[:3]]
+        offers: list[str] = []
+        for slot in _varied(slots, _PARTNER_OFFERS):
+            line = _partner_offer(slot, agent, priority, rid)
+            if len("\n".join([*offers, line])) <= _MAX_TEXT:
+                offers.append(line)
         await reply("\n".join(offers))
         return
     page, pages = _page(world)
@@ -1867,8 +2001,13 @@ async def _answer_search(
         if not _asked(chat, agent, procedure, page + 1):
             await _say(city, LEDGER, f"world procedure={procedure} page={page + 1}")
         return
-    reason = "reserved_u" if reserved else "no_availability"  # MACH-1.2/1.3 code
-    await reply(f"cancel request_id={rid} reason={reason} procedure={procedure}")
+    reason = "reserved_u" if reserved and not near else "no_availability"  # MACH-1.2/1.3 code
+    lines = [f"cancel request_id={rid} reason={reason} procedure={procedure}"]
+    for slot in near[:3]:
+        line = f"{_partner_offer(slot, agent, priority, rid)} relaxed={misses[slot['slot_id']][0]}"
+        if len("\n".join([*lines, line])) <= _MAX_TEXT:
+            lines.append(line)
+    await reply("\n".join(lines))
 
 
 # --- level 6: rebooking after a cancelled booking (from the consultorio) ---------------------------
