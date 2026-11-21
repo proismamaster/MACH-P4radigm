@@ -11,9 +11,9 @@ Aggiorna la tua riga quando cambi stato. Un compito tocca solo i file indicati.
 | Ridurre hospital/consultorio al solo codice dei due ruoli (`tools/riduci_agente.py` + confronto) | Alberto | `asst/hospital/`, `asst/family_counseling/` | da fare | — | prima del prossimo deploy |
 | Specialist: consenso `report_sharing` + messaggi cortesi | Ismail | `asst/specialist/` | online 1.0.2 (22:34) | PR #6, #7, #10 | fatto |
 | CUP: ricerca cross-ASST con `city.find` e consenso `cross_asst` | Abed | `asst/booking_centre/` | online 1.0.1 dalle 22:47 secondo il passaggio di turno; da verificare in Arena | PR #8, #13 | 00:00 (L4) |
-| CUP L4: giorni richiesti al partner e ripresa dopo il rifiuto dell'ultima offerta | Abed | `asst/booking_centre/`, `tools/test_cup_medici.py` | in revisione | `abed/cup-l4-preferenze` | L4 |
-| CUP: parser del consenso con testo prima dell'atto, slot partner ritirato durante il consenso | Abed | `asst/booking_centre/`, `tools/test_cup_recovery.py` | testato in locale, in revisione | `abed/cup-rinnovo-p1` | 00:00 (L4) |
-| CUP: rinnovo P1 (`PRESCRIPTION_EXPIRED` → GP) | Abed | `asst/booking_centre/`, `tools/test_cup_recovery.py` | testato in locale, in revisione | `abed/cup-rinnovo-p1` | prima di L8 |
+| CUP L4: giorni richiesti al partner e ripresa dopo il rifiuto dell'ultima offerta | Abed | `asst/booking_centre/`, `tools/test_cup_medici.py`, `tools/test_cup_recovery.py` | testato in locale, in revisione | `abed/cup-l4-preferenze` | L4 |
+| CUP: parser del consenso con testo prima dell'atto, slot partner ritirato durante il consenso | Abed | `asst/booking_centre/`, `tools/test_cup_recovery.py` | unito su main | PR #14 | 00:00 (L4) |
+| CUP: rinnovo P1 (`PRESCRIPTION_EXPIRED` → GP) | Abed | `asst/booking_centre/`, `tools/test_cup_recovery.py` | unito su main, verifica in Arena da fare | PR #14 | prima di L8 |
 | CUP: lettura preventiva di `rules` | Abed | `asst/booking_centre/` | da verificare con il formato del Ledger in Arena | — | prima di L8 |
 | Collegamento LLM (Gemma) su GitHub | Abed | il suo agente | da pushare | — | subito |
 | Ospedale e consultorio: formato ID nel controllo P2, mai inventare il consent_ref, non riproporre lo slot annullato | Alberto | `asst/hospital/`, `asst/family_counseling/` | da fare | — | prima di L4 |

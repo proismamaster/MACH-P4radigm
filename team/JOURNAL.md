@@ -1,15 +1,16 @@
 # Journal (la voce più recente in alto)
 
-## 2026-11-21 01:06 — Abed — Giorni richiesti nelle ricerche cross-ASST
+## 2026-11-21 01:06 — Abed — Giorni richiesti e rifiuto delle offerte cross-ASST
 
 **Fatto**
 - Il CUP invia ai partner solo i giorni feriali indicati dal cittadino, nel formato `days=mon/wed`. Le regressioni locali verificano normalizzazione, assenza del campo e contenuto della richiesta.
+- Il CUP mantiene l'ordine della cronologia e cerca un'alternativa quando il cittadino rifiuta l'ultimo slot. Le prove con lo SDK coprono anche una conferma tardiva e un invio che il Relay non ha ancora mostrato.
 
 **Problemi**
-- È in lavorazione la ripresa della ricerca dopo il rifiuto dell'ultima offerta.
+- Il doppio commit in ospedale è riprodotto in locale. La causa dei percorsi 069 e 099 va confermata in Arena.
 
 **Prossimo passo**
-- Dopo la revisione e il rilascio, verificare in Arena una ricerca cross-ASST con giorni richiesti.
+- Dopo il rilascio, verificare in Arena una ricerca cross-ASST con giorni richiesti e un rifiuto seguito da un'offerta valida.
 
 ## 2026-11-20 22:53 — Abed — Rinnovo P1 e disponibilità cross-ASST del CUP
 
