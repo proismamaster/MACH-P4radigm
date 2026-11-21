@@ -759,7 +759,7 @@ def _cup_input(message: Message) -> tuple[str, dict[str, str]]:
             key: value for key, value in message.body.items()
             if isinstance(value, str) and value and not any(char.isspace() for char in value)
         }
-    acts = words(message.text) & {"confirm", "booking.receipt", "cancel", "consent", "data.response", "refused"}
+    acts = words(message.text) & {"confirm", "booking.receipt", "cancel", "consent", "data.response", "refused", "hold_refused"}
     if len(acts) > 1:
         return "", {}
     act = next(iter(acts), first_word(message.text))
@@ -875,9 +875,12 @@ async def _booking_centre(city: City, message: Message, chat: list[Message]) -> 
             if booking_id and ledger_ref:
                 receipt = f"booking.receipt booking_id={booking_id} ledger_ref={ledger_ref}"
                 await _cup_send(city, message, cache, citizen, receipt)
-        elif act == "cancel" and fields.get("offer_id") == choice.get("offer_id"):
+        elif act in {"cancel", "hold_refused"} and fields.get("offer_id") == choice.get("offer_id"):
+            # MACH-1.2: a partner reports Ledger refusals as cancel reason=<code in lower case>
+            # or hold_refused ledger_code=<CODE>; both free the case and start a new search.
             citizen_offer = choice.get("cup_offer_id", choice["offer_id"])
-            if fields.get("reason") == "PRESCRIPTION_EXPIRED" and number:
+            code = (fields.get("reason") or fields.get("ledger_code") or "").upper()
+            if code == "PRESCRIPTION_EXPIRED" and number:
                 await _cup_request_renewal(city, message, chat, cache, citizen, number)
             else:
                 await _cup_cancel(
