@@ -732,6 +732,7 @@ def _cup_case(chat: list[Message], agent: str, citizen: str) -> _CupCase:
                 state.cross_consent_request = None
                 state.confirmation = None
                 state.cancellation = row
+                state.booked = False  # our cancel after a receipt (level 6): the case is open again
                 if fields.get("reason") == "consent_declined":
                     state.cross_asst_declined = True
             elif act == "data.request" and fields.get("purpose") == "prescription_renewal":
@@ -826,9 +827,29 @@ async def _booking_centre(city: City, message: Message, chat: list[Message]) -> 
         return
 
     state = _cup_case(chat, city.agent_id, citizen)
-    if state.booked:
-        return
     act, fields = _cup_input(message)
+    if state.booked:
+        # Level 6: a facility (or the city) cancels a booking we already confirmed to the citizen.
+        # Tell the citizen and search again inside the priority window, instead of staying silent.
+        if message.sender != citizen and ("cancel" in words(message.text) or "fault.cancel" in words(message.text)):
+            receipts = [row for row in chat if row.sender == city.agent_id and row.recipient == citizen
+                        and first_word(row.text) == "booking.receipt"]
+            booking_id = fields_of(receipts[-1].text).get("booking_id", "") if receipts else ""
+            confirmations = [row for row in chat if row.sender == city.agent_id and first_word(row.text) == "confirm"]
+            confirmed = fields_of(confirmations[-1].text) if confirmations else {}
+            ours = (
+                (booking_id and fields.get("booking_id") == booking_id)
+                or (confirmed.get("slot_id") and fields.get("slot_id") == confirmed.get("slot_id"))
+                or (confirmations and message.sender == confirmations[-1].recipient)
+            )
+            if ours and not _we(chat, city.agent_id, "reason=facility_cancelled", to=citizen, word="cancel"):
+                slot = confirmed.get("slot_id", "")
+                await _cup_cancel(
+                    city, message, chat, cache, citizen,
+                    f"cancel booking_id={booking_id} slot_id={slot} reason=facility_cancelled "
+                    "La struttura ha annullato la visita. Cerco subito un altro orario per lei.",
+                )
+        return
     pending = state.confirmation
     number = _cup_number(chat, citizen, state.expired_prescriptions)
     if pending is not None:
@@ -1412,6 +1433,16 @@ async def _advance_alone(
     if missing_page is not None:
         if not _asked(catalogue_chat, agent, procedure, missing_page):
             await _cup_send(city, message, sent, LEDGER, f"world procedure={procedure} page={missing_page}")
+        # A Ledger reply does not open a turn: wait for the page here and go on in this turn,
+        # otherwise the case stalls until another message arrives (3-5 real minutes, 197, 1220004).
+        def pages_read(rows: list[Message]) -> int:
+            return sum(1 for row in rows if row.sender == LEDGER and first_word(row.text) == "slots")
+        before = pages_read(chat)
+        fresh_rows = await _until(city, message.need_id, chat, lambda rows: pages_read(rows) > before)
+        if pages_read(fresh_rows) > before:
+            await _advance_alone(
+                city, message, _cup_history(fresh_rows, sent, agent, key), key, replacing=replacing,
+            )
         return
     if number and procedure in _CUP_SERVICES and priority in {"U", "B", "D"}:
         relaxed = _cup_relaxed(

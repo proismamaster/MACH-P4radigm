@@ -342,6 +342,87 @@ async def idempotenza() -> None:
           bool(out) and "slot_id=R-5" not in out[0], h)
 
 
+# --- Livello 8: regole che cambiano a meta' partita (solo consultorio) ---------------------------------
+# Assunzioni (MACH-1.2, "RULE SYNC"; il formato di `rules` non e' nel kit, vedi _rule_on):
+# - Il Ledger rifiuta hold/commit con un codice. Verso il CUP: PRESCRIPTION_EXPIRED, CONSENT_MISSING,
+#   NO_CAPACITY diventano `cancel offer_id=... slot_id=... reason=<codice in minuscolo>`; ogni altro
+#   codice diventa `hold_refused offer_id=... slot_id=... ledger_code=<codice>`.
+# - `rules` si rilegge a ogni turno in cui serve (qui: confirm di un CUP di un'altra ASST senza
+#   cross_asst_consent_ref). P2 acceso: niente hold, cancel reason=consent_missing. P2 spento: hold.
+OTHER_CUP = "agent:t09/booking_centre"  # un'altra ASST (team diverso da quello del consultorio)
+CONFIRM = ("confirm offer_id=of-{s} slot_id={s} citizen=citizen:t09/c-1 consent_ref=cons-{s} "
+           "request_id={r}")
+
+
+def live_rules(h: tf.Harness) -> None:
+    """Il Ledger risponde a `rules` mentre l'agente aspetta, come fa il Relay (non al turno dopo)."""
+    post = h.port.post
+
+    async def wrapped(*, to, message_type, body, need_id, conversation_id, traceparent):
+        mid = await post(to=to, message_type=message_type, body=body, need_id=need_id,
+                         conversation_id=conversation_id, traceparent=traceparent)
+        if to == tf.LEDGER and str(body.get("text", "")).strip() == "rules":
+            h.port.log.append(tf.Message(type="chat", sender=tf.LEDGER, recipient=ME,
+                                         msg_id=tf.uuid4().hex, need_id=need_id,
+                                         conversation_id=conversation_id,
+                                         body={"text": h.world.rules}))
+        return mid
+
+    h.port.post = wrapped
+
+
+async def codici_del_ledger() -> None:
+    print("Rifiuti del Ledger verso il CUP")
+    cases = [("hold", "NO_CAPACITY", "cancel", "reason=no_capacity"),
+             ("hold", "PRESCRIPTION_EXPIRED", "cancel", "reason=prescription_expired"),
+             ("hold", "CONSENT_MISSING", "cancel", "reason=consent_missing"),
+             ("commit", "NO_CAPACITY", "cancel", "reason=no_capacity"),
+             ("hold", "SLOT_UNKNOWN", "hold_refused", "ledger_code=SLOT_UNKNOWN"),
+             ("commit", "RULE_VIOLATION", "hold_refused", "ledger_code=RULE_VIOLATION")]
+    for op, code, head, token in cases:
+        h = tf.Harness(CAP, ME, tf.World(ME, {f"{PROC}:1": tf.slots_reply(ME, REBOOK_ROWS)},
+                                         refuse={op: code}))
+        await h.turn(CUP, search("rq-L1", ""))
+        await h.turn(CUP, CONFIRM.format(s="R-1", r="rq-L1").replace("t09", "t01"))
+        out = h.out(CUP, head)
+        other = h.out(CUP, "hold_refused" if head == "cancel" else "cancel")
+        check(f"{op} rifiutato con {code}: {head} {token} con offer_id e slot_id",
+              len(out) == 1 and token in out[0].split() and "offer_id=of-R-1" in out[0]
+              and "slot_id=R-1" in out[0] and not other, h)
+        check(f"{op} {code}: nessuna ricevuta al CUP", not h.out(CUP, "booking.receipt"), h)
+
+
+async def regole_a_meta_partita() -> None:
+    print("P2 con rules riletto a ogni turno")
+    h = harness(REBOOK_ROWS)
+    live_rules(h)
+    await h.turn(OTHER_CUP, search("rq-P1", ""))
+    h.world.rules = "rules P2=on"
+    await h.turn(OTHER_CUP, CONFIRM.format(s="R-2", r="rq-P1"))
+    check("P2 acceso, nessun cross_asst_consent_ref: nessun hold e cancel consent_missing",
+          not h.out(tf.LEDGER, "hold")
+          and any("reason=consent_missing" in t for t in h.out(OTHER_CUP, "cancel")), h)
+    await h.turn(OTHER_CUP, CONFIRM.format(s="R-3", r="rq-P1") + " cross_asst_consent_ref=cons-x")
+    holds = h.out(tf.LEDGER, "hold")
+    check("P2 acceso con il consenso cross_asst: hold con quel consent_ref",
+          len(holds) == 1 and "slot_id=R-3" in holds[0] and "consent_ref=cons-x" in holds[0], h)
+    h.world.rules = "rules none"
+    await h.turn(OTHER_CUP, CONFIRM.format(s="R-5", r="rq-P1"))
+    holds = h.out(tf.LEDGER, "hold")
+    check("P2 tornato spento: la regola e' riletta, hold su R-5 con il consent_ref della conferma",
+          len(holds) == 2 and "slot_id=R-5" in holds[-1] and "consent_ref=cons-R-5" in holds[-1], h)
+
+    print("P3: la riserva urgente solo a priorita' U")
+    reserve = rslot("R-U", DOC, "2026-11-23T14:00:00.000Z", "mon").replace(
+        "urgent_reserve=false", "urgent_reserve=true")
+    for priority, expected in (("U", True), ("D", False)):
+        h = harness([reserve])
+        await h.turn(CUP, search(f"rq-U{priority}", "").replace("priority=D", f"priority={priority}"))
+        text = " ".join(replies(h))
+        check(f"priorita' {priority}: R-U (riserva urgente) {'offerto' if expected else 'mai offerto'}",
+              ("slot_id=R-U" in text) == expected, h)
+
+
 async def run() -> None:
     await righe_vere()
     await criteri_estesi()
@@ -351,6 +432,8 @@ async def run() -> None:
         await riprenota_cittadino()
         await riprenota_cup()
         await idempotenza()
+        await codici_del_ledger()
+        await regole_a_meta_partita()
     print(f"\n{'TUTTO OK' if not tf.FAILS else str(len(tf.FAILS)) + ' FALLITE'}")
     sys.exit(1 if tf.FAILS else 0)
 
