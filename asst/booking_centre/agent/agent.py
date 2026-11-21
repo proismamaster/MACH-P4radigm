@@ -1028,7 +1028,7 @@ def _cup_partner_slots(
             # Diagnostics: the console shows only citizen messages, so partner replies are
             # visible only here (GET /v1/logs?agent_id=...&q=<need_id>).
             _LOGGED_REPLIES.add(row.msg_id)
-            _LOG.warning("cup.partner_reply need=%s from=%s text=%s", row.need_id, row.sender, row.text[:600])
+            _LOG.warning("cup.partner_reply need=%s from=%s text=%s", row.need_id, row.sender, " | ".join(row.text[:600].splitlines()))
         act, fields = _cup_input(row)
         if act == "cancel":
             if fields.get("request_id", request_id) != request_id:
