@@ -146,6 +146,7 @@ def _cup_partner_candidates(found: list[str], service: str, local: set[str], lan
     return [agent for agent in ordered if agent not in local and _CUP_TOKEN.fullmatch(agent)][:_CUP_MAX_PARTNERS]
 
 _CUP_PARTNER_REPLY_SECONDS = 20
+_CUP_CONFIRM_WAIT = 180  # real seconds without receipt or cancel from the facility
 
 
 def role_of() -> str:
@@ -830,7 +831,7 @@ class _Sent:
 
     __slots__ = (
         "offers", "trigger", "again", "outbox", "uncertain_confirmation", "partner_search_started", "stale_reads",
-        "paging_started",
+        "paging_started", "confirm_sent_at", "confirm_resent",
     )
 
     def __init__(self) -> None:
@@ -843,6 +844,9 @@ class _Sent:
         # Ledger agenda/slots answers read before a P1 renewal: stale once the renewal is asked.
         self.stale_reads: set[str] = set()
         self.paging_started: float | None = None
+        # The confirm to the facility: when it left and whether it was sent again (3590002).
+        self.confirm_sent_at: float | None = None
+        self.confirm_resent = False
 
 
 # Turns of the same need may overlap. Keep state-changing CUP turns serial and
@@ -1059,6 +1063,28 @@ async def _booking_centre(city: City, message: Message, chat: list[Message]) -> 
             await _cup_request_renewal(city, message, chat, cache, citizen, number)
             return
 
+    if pending is not None and message.sender == citizen and cache.confirm_sent_at is not None:
+        # 3590002: the citizen confirmed and the facility never answered (no receipt, no cancel)
+        # for 32 minutes. A citizen turn after _CUP_CONFIRM_WAIT sends the same confirm once
+        # (facilities treat a repeated confirm as the same booking); a second silence releases the
+        # citizen and the search starts again.
+        if monotonic() - cache.confirm_sent_at >= _CUP_CONFIRM_WAIT:
+            facility = pending.recipient
+            if not cache.confirm_resent:
+                cache.confirm_resent, cache.confirm_sent_at = True, monotonic()
+                _LOG.warning("cup.confirm need=%s facility=%s resend", message.need_id, facility)
+                await _cup_send(city, message, cache, facility, pending.text)
+                return
+            choice = fields_of(pending.text)
+            offer_id = choice.get("cup_offer_id") or choice.get("offer_id", "")
+            cache.confirm_sent_at = None
+            _LOG.warning("cup.confirm need=%s facility=%s silent, released", message.need_id, facility)
+            await _cup_cancel(
+                city, message, chat, cache, citizen,
+                f"cancel offer_id={offer_id} reason=facility_unavailable "
+                "La struttura non ha risposto alla conferma. Cerco subito un altro orario per lei.",
+            )
+            return
     if pending is not None:
         received_at = _when(message.sent_at)
         sent_at = _when(pending.sent_at)
@@ -1171,6 +1197,8 @@ async def _cup_confirm(
         )
     # If the send has no definite outcome, wait for history rather than sending a second confirm.
     cache.uncertain_confirmation = True
+    cache.confirm_sent_at, cache.confirm_resent = monotonic(), False
+    _LOG.warning("cup.confirm need=%s facility=%s slot=%s", message.need_id, facility, slot)
     try:
         await _cup_post(city, message, cache, facility, confirmation)
     except CapError as error:

@@ -386,6 +386,28 @@ class CupRecoveryTests(unittest.IsolatedAsyncioTestCase):
             "The citizen should be told which offer was withdrawn",
         )
 
+    async def test_confirm_without_facility_answer_is_resent_then_released(self):
+        """3590002: citizen confirmed, the facility never answered for 32 minutes."""
+        case = Case(self.brain, "confirm-silence")
+        await case.open(local_free=1, second_local_slot=True)
+        clock = [1000.0]
+        with patch.object(self.brain, "monotonic", lambda: clock[0]):
+            offer_id = await case.accept_offer()
+            self.assertEqual(len(case.out(HOSPITAL, "confirm")), 1)
+            clock[0] += 60
+            await case.turn(case.add(CITIZEN, f"confirm offer_id={offer_id} consent_ref=cons-42-booking"))
+            self.assertEqual(len(case.out(HOSPITAL, "confirm")), 1, "Too early: no resend yet")
+            clock[0] += 200
+            await case.turn(case.add(CITIZEN, f"confirm offer_id={offer_id} consent_ref=cons-42-booking"))
+            self.assertEqual(len(case.out(HOSPITAL, "confirm")), 2, "Silent facility: the confirm is sent again once")
+            self.assertEqual(case.out(CITIZEN, "cancel"), [])
+            clock[0] += 200
+            await case.turn(case.add(CITIZEN, f"confirm offer_id={offer_id} consent_ref=cons-42-booking"))
+            self.assertEqual(len(case.out(HOSPITAL, "confirm")), 2, "Never a third confirm")
+            cancels = case.out(CITIZEN, "cancel")
+            self.assertEqual(len(cancels), 1, "Still silent: the citizen is released and the search restarts")
+            self.assertIn(f"offer_id={offer_id}", cancels[0].text)
+
     async def test_cross_asst_withdrawal_without_request_id_keeps_other_slot(self):
         case = Case(self.brain, "withdrawal-alternative")
         offer_id, _ = await case.reach_remote_consent(second_partner_slot=True)
