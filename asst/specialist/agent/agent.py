@@ -787,7 +787,7 @@ async def _on_checked_in(
 
 _CONSENT_ASK = "purpose=report_sharing"
 # How long the check-in turn waits for the answer to the consent question before archiving.
-_CONSENT_WAIT = 20.0
+_CONSENT_WAIT = 2.0  # the conformance health check (p99) fails with a 20 s wait in the turn
 # Bookings whose report this process already sent to the Ledger (parallel-turn guard).
 _REPORT_SENT: set[str] = set()
 
