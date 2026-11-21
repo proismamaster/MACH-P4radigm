@@ -19,7 +19,7 @@ Controllato con `city --json status` alle 13:30 UTC.
 |---|---|---|---|---|---|
 | gp | `agent:rng5wcrzvhsj` | 1.0.8 | 12:54 | `dep-2d32afeb19854e3caaa323037142db3d` | 1.0.7 |
 | booking_centre | `agent:ez8cb7j167p2` | 1.0.29 (#137, #147) | 13:30 | `dep-97f5eaf7865f44e9b2b6696549c95932` | 1.0.28 |
-| hospital | `agent:bb01ggxymm05` | 1.0.9 | 13:24 | `dep-e6bc1425d0ad445db4ec950a58b745ff` | 1.0.8 |
+| hospital | `agent:bb01ggxymm05` | 1.0.10 | 14:07 | `dep-a28074231fff4f0dab3182bd4564e486` | 1.0.9 |
 | specialist | `agent:sh35cbsy287d` | 1.0.11 | 13:10 | `dep-086fb4eecd7443579088651be26d69b7` | 1.0.10 |
 | family_counseling | `agent:nkh372rd16yq` | 1.0.14 | 11:45 | `dep-a3b16f15ea954d64814b20edde0e05f6` | 1.0.13 |
 
@@ -80,4 +80,5 @@ Le ondate di cittadini arrivano ai minuti :11, :31 e :51: niente deploy né scal
 | 21/11 13:24 | hospital | 1.0.9 | deploy (Andrei) | `dep-e6bc1425d0ad445db4ec950a58b745ff` | `3360c20` | #145: agenda estrapolata sempre valida per le ricerche dei partner, pagina rinnovata dopo 60 s (senza attesa), check-in senza `booking_id` ricostruito dalla riga `committed`. Conformance PASS (21,8 s). |
 | 21/11 13:19 | booking_centre | 1.0.28 | deploy (Ismail/Opus) | `dep-2f0dac5109094d3fb1b4793dbc9d6867` | `dbdca93` | #137 (Abed): prima di ritentare la conferma il CUP cerca nella storia la ricevuta della struttura e la manda al cittadino; se dopo la ricevuta c'è un annullamento della prenotazione cerca un'alternativa. 34/34 file di test verdi su `main` con la #137. Scale tenuto dal deploy (1-1 c32). Conformance PASS. |
 | 21/11 13:30 | booking_centre | 1.0.29 | deploy (Ismail/Opus) | `dep-97f5eaf7865f44e9b2b6696549c95932` | `f3f6cf9` | #147: ricetta, agenda e `world` letti nella storia fino a 420 s (ogni 2 s, poi 5 s), un 429 non chiude l'attesa. Export 13:17 UTC: 44 falliti su 84 (12:08-13:13) con la need.request del cittadino senza risposta, il CUP leggeva 24 volte e poi dipendeva dal push. 35/35 file di test verdi. Scale tenuto (1-1 c32). Conformance PASS. |
+| 21/11 14:07 | hospital | 1.0.10 | deploy (Andrei) | `dep-a28074231fff4f0dab3182bd4564e486` | `39a0e65` | #148: slot con `capacity=0` mai offerti; criteri MACH-1.2 nelle ricerche dei partner (giorni, `after`/`before` ora di Milano, genere, lingua) con alternative `relaxed=` sotto il cancel `no_availability`; fino a 5 offerte varie (genere, giorno); confirm dei partner mai muti (`cross_asst_consent_ref` come consenso, `consent_missing`, `offer_unknown`); ricerca senza `procedure=` offre VIS-FIS; regole di altri casi come ripiego per P2; check-in ritentato su 5xx. Conformance PASS (26,2 s). |
 Commit: per le righe fino alle 07:29 è il commit del bump della card (il codice rilasciato è quello del suo genitore su `main`); dalle prossime, lo SHA di `main` rilasciato. Le righe con «—» sono ricostruite dai commit: chi ha fatto quei deploy può completare il deployment.
