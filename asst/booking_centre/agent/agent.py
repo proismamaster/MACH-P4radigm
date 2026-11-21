@@ -1265,20 +1265,38 @@ async def _cup_cross_asst(
         )
         return
     reason = "partner_unavailable" if pending else "no_slots"
-    if not _we(chat, city.agent_id, f"reason={reason}", to=citizen, word="cancel"):
-        await _cup_send(
-            city, message, cache, citizen,
-            f"cancel reason={reason} Non ho trovato orari confermabili. Possiamo cercare altri giorni se per te va bene.",
-        )
+    notice = _no_slots_text(next(iter(_cup_case(chat, city.agent_id, citizen).offers), ""), reason)
+    said = any(_we(chat, city.agent_id, f"reason={code}", to=citizen, word="cancel")
+               for code in ("partner_unavailable", "no_slots"))
+    if not said and not _exact(chat, city.agent_id, notice):
+        await _cup_send(city, message, cache, citizen, notice)
+
+
+def _no_slots_text(open_offer: str, reason: str) -> str:
+    """No slot to propose. A cancel always names the offer it cancels (without it the citizen asks
+    "Which offer_id?"); with no offer open it is a plain sentence with no act word."""
+    sentence = "Non ho trovato orari confermabili. Possiamo cercare altri giorni se per te va bene."
+    return f"cancel offer_id={open_offer} reason={reason} {sentence}" if open_offer else sentence
+
+
+def _deadline_refused(chat: list[Message], citizen: str) -> bool:
+    """The citizen refused an offer for its deadline: later dates are no alternative."""
+    return any(
+        row.sender == citizen and "cancel" in words(row.text) and "deadline" in words(row.text.replace("=", " "))
+        for row in chat
+    )
 
 
 def _cup_relaxed(
     lines: list[str], *, now: datetime, lang: str, gender: str | None, procedure: str,
-    priority: str | None = None,
+    priority: str | None = None, widen: bool = True,
 ) -> list[dict[str, str]]:
-    """Try other weekdays within the priority window, then widen only the window."""
+    """Try other weekdays within the priority window, then widen only the window (not after a
+    refusal for the deadline: a later date is exactly what the citizen refused)."""
     within_window = fitting(lines, now=now, priority=priority, lang=lang, gender=gender, procedure=procedure)
-    return within_window or fitting(
+    if within_window or not widen:
+        return within_window
+    return fitting(
         lines, now=now, priority=priority, lang=lang, gender=gender, procedure=procedure, relax_window=True,
     )
 
@@ -1464,6 +1482,7 @@ async def _advance_alone(
     if number and procedure in _CUP_SERVICES and priority in {"U", "B", "D"}:
         relaxed = _cup_relaxed(
             lines, now=now, lang=language, gender=gender, procedure=procedure, priority=priority,
+            widen=not _deadline_refused(chat, citizen),
         )
         if case.cross_asst_declined:
             if relaxed:
