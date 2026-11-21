@@ -14,7 +14,7 @@ import os
 import re
 from collections import OrderedDict
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from city_sdk.city import LEDGER, CapError, City, Message, Need, OutOfScope, clinical, understood
@@ -29,6 +29,12 @@ _LEAD = timedelta(hours=4)
 # reason=past; 59 confirms out of 61 without a receipt, PROBLEMS 04:25). Slots at least this far
 # ahead go first; the nearer ones stay at the end of the list as a fallback.
 _DECISION_LEAD = timedelta(hours=24)
+# Offers to booking centres: never nearer than this, on the extrapolated agenda clock. Same values as
+# the CUP and the consultorio (tools/sim_percorsi.py): the partner offers, the citizen decides, the
+# confirm comes back and the hold goes through the Ledger, which takes minutes (PROBLEMS 06:15).
+_MIN_LEAD = timedelta(hours=10)
+_MIN_LEAD_U = timedelta(hours=4)
+_AGENDA_RATE = 60  # one real minute is one agenda hour
 # Doctor key (the last segment of doctor_id) -> languages, gender, days. ``*`` is the ASST's
 # rare language. The Ledger's slot line names the doctor; it does not repeat this table.
 _DOCTORS: dict[str, tuple[frozenset[str], str, frozenset[str]]] = {
@@ -80,6 +86,37 @@ _PULL_TRIES = 24
 _PULL_PAUSE = 0.25
 # Needs whose sent offers this process remembers; the oldest is forgotten first.
 _SENT_NEEDS = 4096
+
+
+def _agenda_add(start: datetime, delta: timedelta) -> datetime:
+    """``start`` plus ``delta`` of agenda time; Saturday and Sunday do not exist in the agenda."""
+    out = start
+    while delta > timedelta(0):
+        midnight = (out + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        step = min(delta, midnight - out)
+        out, delta = out + step, delta - step
+        if out.weekday() >= 5:
+            out += timedelta(days=7 - out.weekday())
+    return out
+
+
+def _agenda_now(chat: list[Message], real_now: datetime | None = None) -> datetime | None:
+    """The agenda clock now: the Ledger's last agenda_now plus the real time since that reply x60
+    (as in the CUP and the consultorio). The Ledger answers in 7-9 minutes, so the raw value is
+    hours of agenda old when a search is answered."""
+    found: tuple[datetime, datetime | None] | None = None
+    for row in chat:
+        if row.sender == LEDGER and first_word(row.text) == "agenda":
+            at = _when(fields_of(row.text).get("agenda_now", ""))
+            if at is not None:
+                found = (at, _when(row.sent_at or ""))
+    if found is None:
+        return None
+    at, read = found
+    if read is None:
+        return at
+    elapsed = (real_now or datetime.now(timezone.utc)) - read
+    return _agenda_add(at, max(elapsed, timedelta(0)) * _AGENDA_RATE)
 
 
 def role_of() -> str:
@@ -528,7 +565,10 @@ def _our_offer(chat: list[Message], agent: str, offer_id: str) -> dict[str, str]
     token = f"offer_id={offer_id}"
     for row in chat:
         if row.sender == agent and token in row.text.split() and "offer" in words(row.text):
-            return fields_of(row.text)
+            # A search reply has up to three offer lines: the fields of THIS offer's line, not the
+            # first line's (a confirm with only offer_id held the first slot, Prova M).
+            line = next((line for line in row.text.splitlines() if token in line.split()), row.text)
+            return fields_of(line)
     return {}
 
 
@@ -1439,13 +1479,13 @@ def _facility_slots(
         earliest = None
     elif priority == "U":
         horizon = now.replace(hour=23, minute=59, second=59, microsecond=0)
-        earliest = now + _LEAD
+        earliest = now + _MIN_LEAD_U
     elif priority == "P":
         horizon = None
-        earliest = now + _LEAD
+        earliest = now + _MIN_LEAD
     else:
         horizon = _agenda_horizon(now, _DEADLINE_DAYS.get(priority or "", 14))
-        earliest = now + _LEAD
+        earliest = now + _MIN_LEAD
     chosen: list[tuple[datetime, dict[str, str]]] = []
     reserved = 0
     for line in lines:
@@ -1562,8 +1602,7 @@ async def _answer_search(
     priority = (fields.get("priority") or "").upper() or None
 
     world = _latest_slots_for(chat, procedure)
-    agenda = _ledger(chat, "agenda")
-    now = _when("" if agenda is None else agenda.get("agenda_now", ""))
+    now = _agenda_now(chat)
     if world is None or now is None:
         if world is None and not _asked(chat, agent, procedure, 1):
             await _say(city, LEDGER, f"world procedure={procedure} page=1")
@@ -1578,8 +1617,7 @@ async def _answer_search(
             lambda rows: _latest_slots_for(rows, procedure) is not None and _has_agenda(rows),
         )
         world = _latest_slots_for(chat, procedure)
-        agenda = _ledger(chat, "agenda")
-        now = _when("" if agenda is None else agenda.get("agenda_now", ""))
+        now = _agenda_now(chat)
         if world is None or now is None:
             # The Ledger answers in a later turn; _resume_searches picks the search up there.
             return

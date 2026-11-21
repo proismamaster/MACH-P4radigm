@@ -14,6 +14,7 @@ import importlib.util
 import os
 import sys
 import tempfile
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from city_sdk.city import LEDGER, City, Message, Need, Peer
@@ -701,13 +702,15 @@ async def prova_k() -> None:
     rows = [
         "slot_id=N-1 doctor_id=D-x1 facility=ME procedure=VIS-FIS at=2026-11-23T13:00:00+01:00 day=mon free=1",
         "slot_id=N-2 doctor_id=D-x1 facility=ME procedure=VIS-FIS at=2026-11-23T16:00:00+01:00 day=mon free=1",
+        "slot_id=N-3 doctor_id=D-x2 facility=ME procedure=VIS-FIS at=2026-11-23T20:00:00+01:00 day=mon free=1",
         "slot_id=F-1 doctor_id=D-x1 facility=ME procedure=VIS-FIS at=2026-11-24T10:00:00+01:00 day=tue free=1",
         "slot_id=F-2 doctor_id=D-x2 facility=ME procedure=VIS-FIS at=2026-11-24T15:00:00+01:00 day=tue free=1",
     ]
     # D (5 giorni): prima gli slot ad almeno 24 ore. B (scadenza dalla nascita del need, ~20 ore gia'
-    # passate quando il CUP scrive): il piu' vicino prima, come chiede MACH-1.3.
-    for priority, expected, label in (("D", ["F-1", "F-2", "N-1"], "D: prima martedi' (oltre 24 ore), poi il vicino N-1"),
-                                      ("B", ["N-1", "N-2", "F-1"], "B: prima il piu' vicino (finestra corta)")):
+    # passate quando il CUP scrive): il piu' vicino prima, come chiede MACH-1.3. Mai sotto le 10 ore
+    # (Prova L): N-1 a 5 ore e N-2 a 8 ore restano fuori per B e D.
+    for priority, expected, label in (("D", ["F-1", "F-2", "N-3"], "D: prima martedi' (oltre 24 ore), poi N-3 a 12 ore"),
+                                      ("B", ["N-3", "F-1", "F-2"], "B: prima il piu' vicino oltre le 10 ore (N-3)")):
         h = Harness("hospital.physiatry", HOSP, World(HOSP, {"VIS-FIS:1": slots_reply(HOSP, rows)}))
         await h.turn(CUP_EXT, SEARCH.replace("priority=B", f"priority={priority}").replace("rq-T1", f"rq-K{priority}"))
         offers = h.out(CUP_EXT, "offer")
@@ -722,8 +725,71 @@ async def prova_k() -> None:
           "slot_id=N-1" in body and "slot_id=F-1" not in body, h)
 
 
+def _ledger_row(h: Harness, text: str, age: timedelta) -> None:
+    """Una risposta del Ledger gia' nel caso, arrivata ``age`` di tempo reale fa."""
+    sent = (datetime.now(timezone.utc) - age).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    h.port.log.append(Message(type="chat", sender=LEDGER, recipient=h.me, msg_id=uuid4().hex,
+                              need_id=h.need, conversation_id="c-ledger", body={"text": text},
+                              sent_at=sent))
+
+
+async def prova_l() -> None:
+    """Orologio d'agenda e anticipo minimo nelle offerte ai CUP partner (come CUP e consultorio).
+
+    Il Ledger risponde in 7-9 minuti (PROBLEMS, 06:15): la riga agenda_now che l'ospedale legge e'
+    vecchia di ore d'agenda. Con l'orario grezzo e 4 ore di anticipo, per una B offriva uno slot gia'
+    vicino o passato: il cittadino dell'altra ASST conferma, l'hold e' rifiutato (EXPIRED), nessun hold
+    nel verdetto. Ora: agenda_now + tempo reale x60, minimo 10 ore (U 4) come CUP e consultorio."""
+
+    print("Prova L - orologio d'agenda estrapolato e minimo 10 ore per B (offerte ai partner)")
+    rows = [
+        # agenda_now 08:00, letta 6 minuti reali fa: ora d'agenda vera ~14:00 di lunedi'.
+        "slot_id=L-1 doctor_id=D-x1 facility=ME procedure=VIS-FIS at=2026-11-23T16:00:00+01:00 day=mon free=1",
+        "slot_id=L-2 doctor_id=D-x1 facility=ME procedure=VIS-FIS at=2026-11-23T22:00:00+01:00 day=mon free=1",
+        "slot_id=L-3 doctor_id=D-x2 facility=ME procedure=VIS-FIS at=2026-11-24T09:00:00+01:00 day=tue free=1",
+    ]
+    h = Harness("hospital.physiatry", HOSP, World(HOSP))
+    _ledger_row(h, "agenda agenda_now=2026-11-23T08:00:00+01:00", timedelta(minutes=6))
+    _ledger_row(h, slots_reply(HOSP, rows), timedelta(minutes=6))
+    await h.turn(CUP_EXT, SEARCH.replace("rq-T1", "rq-L1"))
+    body = " ".join(h.out(CUP_EXT, "offer"))
+    check("B, agenda letta 6 minuti fa: niente slot a 2 o 8 ore d'agenda vere, si' quello di martedi'",
+          "slot_id=L-3" in body and "slot_id=L-1" not in body and "slot_id=L-2" not in body, h)
+
+    h = Harness("hospital.physiatry", HOSP, World(HOSP))
+    _ledger_row(h, "agenda agenda_now=2026-11-23T08:00:00+01:00", timedelta(seconds=5))
+    _ledger_row(h, slots_reply(HOSP, rows), timedelta(seconds=5))
+    await h.turn(CUP_EXT, SEARCH.replace("rq-T1", "rq-L2"))
+    body = " ".join(h.out(CUP_EXT, "offer"))
+    check("B, agenda appena letta (08:00): L-1 a 8 ore resta fuori (minimo 10), L-2 a 14 ore entra",
+          "slot_id=L-1" not in body and "slot_id=L-2" in body, h)
+
+
+async def prova_m() -> None:
+    """Un CUP partner conferma con il solo offer_id della seconda offerta della nostra risposta.
+
+    La risposta a una ricerca ha fino a tre righe `offer` nello stesso messaggio. `_our_offer` leggeva
+    i campi dell'intero messaggio: slot_id della PRIMA riga, quindi hold sullo slot sbagliato."""
+
+    print("Prova M - confirm partner con il solo offer_id: hold sullo slot di quella riga")
+    rows = [
+        "slot_id=M-1 doctor_id=D-x1 facility=ME procedure=VIS-FIS at=2026-11-24T09:00:00+01:00 day=tue free=1",
+        "slot_id=M-2 doctor_id=D-x2 facility=ME procedure=VIS-FIS at=2026-11-24T10:00:00+01:00 day=tue free=1",
+    ]
+    h = Harness("hospital.physiatry", HOSP, World(HOSP, {"VIS-FIS:1": slots_reply(HOSP, rows)}))
+    await h.turn(CUP_EXT, SEARCH.replace("rq-T1", "rq-M1"))
+    offers = h.out(CUP_EXT, "offer")
+    second = next((line for line in (offers[0].splitlines() if offers else []) if "slot_id=M-2" in line), "")
+    offer_id = next((w.split("=", 1)[1] for w in second.split() if w.startswith("offer_id=")), "")
+    await h.turn(CUP_EXT, f"confirm offer_id={offer_id} citizen={CIT} consent_ref=cons-N-booking "
+                          "cross_asst_consent_ref=cons-N-cross")
+    holds = h.out(LEDGER, "hold")
+    check("confirm della seconda offerta senza slot_id: un hold, su M-2",
+          bool(offer_id) and len(holds) == 1 and "slot_id=M-2" in holds[0].split(), h)
+
+
 async def run() -> None:
-    # Ogni agente ha le sue prove: A, B, D, F, G e I provano l'ospedale, C il consultorio; E e H valgono per tutti.
+    # Ogni agente ha le sue prove: A, B, D, F, G, I-M provano l'ospedale, C il consultorio; E e H valgono per tutti.
     if "family_counseling" in os.path.normpath(AGENT_FILE).split(os.sep):
         await prova_c()
     else:
@@ -735,6 +801,8 @@ async def run() -> None:
         await prova_i()
         await prova_j()
         await prova_k()
+        await prova_l()
+        await prova_m()
     await prova_e()
     await prova_h()
     print(f"\n{'TUTTO OK' if not FAILS else str(len(FAILS)) + ' FALLITE'}")
