@@ -16,6 +16,7 @@ from collections import OrderedDict
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from time import monotonic
 
 from city_sdk.city import LEDGER, CapError, City, Message, Need, OutOfScope, clinical, understood
 
@@ -60,9 +61,54 @@ def role_of() -> str:
     return _card_role(text)
 
 
+# Trust ring (level 8, impostors from 10:00): an agent talks to us only if it is in the ring list
+# or city.find returns it as a booking centre. Anyone else gets no reply and no Ledger call: an
+# answer to a stranger is one effect too many. The list holds the facilities published on Discord;
+# the booking centres of the other ASST come from city.find.
+_RING = frozenset((
+    "agent:h6r1v45esk77", "agent:hnpe58epeyh1", "agent:gpr1zqe343gb", "agent:zand0f57ec1j",
+    "agent:nanpr5mgm2py", "agent:pky3vqyqbepa", "agent:xtj1dk9x3qej", "agent:q18es2d82f8r",
+    "agent:x0vr9rbwpesr", "agent:h8425ac7btd8", "agent:tmt0bcv0st1f", "agent:n9bf9y6670hp",
+    "agent:s1twcdzg3296", "agent:f2s88vwd3jnf", "agent:gxq3vzgt3h5t", "agent:tty8erdj6t41",
+    "agent:etpwrfmfa8hm",
+))
+_KNOWN: dict[str, float] = {}  # booking centre -> when city.find last confirmed it
+_KNOWN_FOR = 300.0
+_FIND_EVERY = 5.0  # an unknown sender cannot make us query the Index more often than this
+_found_at = [-_FIND_EVERY]
+
+
+async def _in_ring(city: City, sender: str) -> bool:
+    if sender in _RING or _KNOWN.get(sender, 0.0) > monotonic():
+        return True
+    if monotonic() - _found_at[0] < _FIND_EVERY:
+        return False
+    _found_at[0] = monotonic()
+    try:
+        peers = await city.find("booking_centre")
+    except CapError:
+        return False
+    for peer in peers:
+        if peer.role == "booking_centre" or any(c.split(".")[0] == "booking_centre" for c in peer.capabilities):
+            _KNOWN[peer.agent_id] = monotonic() + _KNOWN_FOR
+    return _KNOWN.get(sender, 0.0) > monotonic()
+
+
+async def _admitted(city: City, message: Message) -> bool:
+    sender = message.sender
+    if sender == LEDGER or sender == city.agent_id or sender.startswith(("citizen:", "city:")):
+        return True
+    # facility= names the sender (its own offer) or us (the booking centre's confirm); a third
+    # facility is a forged claim.
+    facility = _search_fields(message).get("facility", "")
+    if facility and facility not in (sender, city.agent_id):
+        return False
+    return await _in_ring(city, sender)
+
+
 async def main(need: Need, city: City) -> None:
     message = city.inbound
-    if message is None:
+    if message is None or not await _admitted(city, message):
         return
     text = message.text or need.summary
     if clinical(text):

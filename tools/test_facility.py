@@ -16,7 +16,7 @@ import sys
 import tempfile
 from uuid import uuid4
 
-from city_sdk.city import LEDGER, City, Message, Need
+from city_sdk.city import LEDGER, City, Message, Need, Peer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -47,8 +47,11 @@ def load(cap: str, aid: str):
 
 
 class Index:
+    """city.find: i centri prenotazioni dei test (t01, t02, t09), come li darebbe l'Index vero."""
+
     async def search(self, query):
-        return []
+        return [Peer(agent_id=f"agent:{t}/booking_centre", role="booking_centre",
+                     capabilities=("booking_centre",)) for t in ("t01", "t02", "t09")]
 
 
 class Port:
