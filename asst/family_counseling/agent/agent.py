@@ -379,7 +379,9 @@ def _latest(chat: list[Message], head: str, token: str) -> Message | None:
 # 08:22:23; 30 of 36 commits refused STALE_FENCE, every commit sent within 10 s of `held` went through).
 # The case history shows a reply as soon as the Relay accepts it, so a turn that has just asked the Ledger
 # keeps reading the case for up to _WAIT_SECONDS and goes on the moment the reply is there.
-_WAIT_SECONDS = 180.0
+# 21/11 10:06-10:10 UTC: the Ledger took 208-217 s per request (350-500 s at 04:00-05:00), so a 180 s wait
+# ended just before the reply and the push brought the old delay back.
+_WAIT_SECONDS = 420.0
 _WAIT_STEP = 1.0
 
 
