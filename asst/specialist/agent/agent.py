@@ -16,6 +16,7 @@ from collections import OrderedDict
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from time import monotonic
 
 from city_sdk.city import LEDGER, CapError, City, Message, Need, OutOfScope, clinical, understood
 
@@ -74,6 +75,12 @@ _LOG = logging.getLogger("care")
 # the case history and never opens a turn. Wait briefly and read it back from history.
 _PULL_TRIES = 24
 _PULL_PAUSE = 0.25
+# Console 21/11 (hospital, tools/misura_latenze.js): held -> commit through the push took a median 107 s and the
+# commit came back STALE_FENCE 10 of 12; a hold lasts about two minutes. After a hold the confirm turn reads the
+# history for up to _WAIT_SECONDS, as the hospital and the consultorio do (exports 11:08-11:53 UTC: 11 confirms
+# to this specialist never answered, 11 facility_cancelled).
+_WAIT_SECONDS = 180.0
+_WAIT_STEP = 1.0
 # Needs whose sent offers this process remembers; the oldest is forgotten first.
 _SENT_NEEDS = 4096
 
@@ -284,12 +291,15 @@ async def _await_line(
     token: str,
     *,
     op: str,
+    patient: bool = False,
 ) -> tuple[Message, list[Message]] | None:
-    """The ledger line for ``token``, or a refusal of ``op`` that was not already in ``chat``."""
+    """The ledger line for ``token``, or a refusal of ``op`` that was not already in ``chat``.
+    ``patient`` reads the case for up to _WAIT_SECONDS instead of _PULL_TRIES times."""
 
     known = {row.msg_id for row in chat}
     fresh = chat
-    for attempt in range(_PULL_TRIES):
+    started, attempt = monotonic(), 0
+    while True:
         try:
             fresh = await city.history(need_id=need_id)
         except CapError:
@@ -302,9 +312,16 @@ async def _await_line(
                 continue
             if first_word(row.text) == "refused" and op in words(row.text):
                 return row, fresh
-        if attempt + 1 < _PULL_TRIES:
+        attempt += 1
+        if patient:
+            elapsed = monotonic() - started
+            if elapsed >= _WAIT_SECONDS:
+                return None
+            await asyncio.sleep(_WAIT_STEP if elapsed < 30 else 2 * _WAIT_STEP)  # a read is a signed relay call
+        else:
+            if attempt >= _PULL_TRIES:
+                return None
             await asyncio.sleep(_PULL_PAUSE)
-    return None
 
 
 # --- medico di base ----------------------------------------------------------------------------
@@ -603,7 +620,7 @@ async def _finish_booking(
 ) -> None:
     """Hold is in the mailbox. Read the held line and commit before this turn ends."""
 
-    found = await _await_line(city, message.need_id, chat, "held", f"slot_id={slot}", op="hold")
+    found = await _await_line(city, message.need_id, chat, "held", f"slot_id={slot}", op="hold", patient=True)
     if found is None:
         _LOG.warning("care.held.missing need=%s slot=%s", message.need_id, slot)
         return
@@ -616,7 +633,7 @@ async def _finish_booking(
     if not hold_id:
         return
     done = await _await_line(
-        city, message.need_id, fresh, "committed", f"booking_id={hold_id}", op="commit"
+        city, message.need_id, fresh, "committed", f"booking_id={hold_id}", op="commit", patient=True
     )
     if done is None:
         _LOG.info("care.commit.missing", extra={"need_id": (message.need_id or "")[:48]})
