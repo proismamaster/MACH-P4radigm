@@ -1,6 +1,26 @@
 
 # Problemi
 
+## CAUSA CONFERMATA (21/11 06:15): il Ledger risponde in 7-9 minuti, ogni passaggio costa ore d'agenda
+
+Dati: messaggi di CUP, GP e consultorio letti da `/v1/team/agents/<id>/messages` (21/11 04:18-05:15 UTC, 1900 messaggi del CUP, 600 del GP, 300 del consultorio) e percorsi da `/v1/team/journeys/<need_id>`. Orari UTC.
+
+| Fatto | Misura |
+|---|---|
+| Risposta del Ledger al CUP | agenda p50 537 s, ricetta p50 540 s, world p50 478 s (35 richieste) |
+| Risposta del Ledger a GP e consultorio | `world`/`prescribe` 440-470 s; `hold`/`commit`/`agenda` 445-585 s |
+| La risposta del Ledger apre il nostro turno | 360-450 s dopo, senza altri messaggi in mezzo |
+| Inizio | GP: p50 22 s alle 03:40, 246 s alle 04:10, 338 s alle 04:20 |
+| Il pod non c'entra | GP: 34 messaggi su 221 a meno di 1 s l'uno dall'altro; scale a concorrenza 8 (04:48) senza effetto |
+| `world` al GP | 84 risposte su 84: una pagina di slot, nessuna tabella dei protocolli, nessuna red flag |
+| Ricerche ai partner | 550 in 26 minuti (22 × 25), ~500 risposte (315 `no_availability`, 99 "Ricevuto"), 45 offerte da 7 partner, 1 arrivata a un cittadino, 0 confirm |
+
+Effetto: un minuto reale è un'ora d'agenda, quindi ogni passaggio costa 6-9 ore della finestra B (48 ore). Prima del correttivo il GP faceva 3 passaggi per una ricetta e il CUP 2-6 prima della prima offerta.
+
+**Correzione** (`f72ce63`): world, agenda e pagine condivisi per ondata (GP 10 minuti, CUP e consultorio 5); ricetta + agenda + pagina 1 nello stesso turno; pagine mancanti 6 alla volta; al massimo 6 partner per ricerca, prima quelli che offrono; nessuna attesa nei turni aperti dalle risposte dei partner. GP 1.0.5 online dalle 08:29; CUP 1.0.24 e consultorio 1.0.9 alle 10:00. Da verificare in console: tempo cittadino → ricetta, `need.request` → prima offerta, ricerche ai partner per caso.
+
+**Resta**: hold → commit sono due giri obbligati (il commit vuole `hold_id` e `fence` del `held`). Il ritardo è della piattaforma: non si vede se è uguale per tutte le squadre.
+
 ## CAUSA CONFERMATA dei confirm senza ricevuta: lo slot e' gia' passato quando il cittadino decide (21/11 04:25)
 
 Un minuto reale e' un'ora d'agenda. Il cittadino risponde alle offerte dopo 3-20 minuti reali (nei dati: mediana ~176 s, p90 ~217 s, punte di 1116-1645 s), cioe' dopo 3-27 ORE d'agenda. Il CUP e le strutture offrono i primi slot disponibili (anticipo minimo 4 ore, e dopo la mia PR 1 ora): quando il cittadino conferma o rifiuta, lo slot e' gia' nel passato.
@@ -9,7 +29,7 @@ Prova (consultorio 1.0.7, percorso 8909110001400007): primo messaggio del cittad
 
 Spiega: i rifiuti `past` (24), gli `EXPIRED` del consultorio, buona parte dei `facility_cancelled` e il 97% di confirm senza ricevuta. NON spiega i 34 silenzi, ne' `STALE_FENCE`.
 
-**Correzione da fare** (non fatta): offrire slot ad almeno ~24 ore d'agenda (meglio 30) dall'ora dell'offerta, tenendo come minimo 4 ore; i posti vicini vanno in coda. Valori da cambiare: consultorio `_LEAD` e `fitting`/`_facility_slots`; CUP `_LEAD` (4 h -> 24+ h) e `_MIN_LEAD` (1 h -> 4 h). Entro le finestre B (2 giorni) e D (5 giorni) restano posti. Verificare in console `past` ed `EXPIRED` dopo il deploy.
+**Correzione fatta**: ospedale 24 ore (`9873f6f`, online dalla 1.0.4); CUP e consultorio preferenza 30 ore (`62eb588`, online da CUP 1.0.22 e consultorio 1.0.8); minimo 10 ore e margine di 1 ora al confirm (`e2d1518`) e R7 del consultorio (`b5dcb99`) si pubblicano alle 10:00. Testo originale: offrire slot ad almeno ~24 ore d'agenda (meglio 30) dall'ora dell'offerta, tenendo come minimo 4 ore; i posti vicini vanno in coda. Valori da cambiare: consultorio `_LEAD` e `fitting`/`_facility_slots`; CUP `_LEAD` (4 h -> 24+ h) e `_MIN_LEAD` (1 h -> 4 h). Entro le finestre B (2 giorni) e D (5 giorni) restano posti. Verificare in console `past` ed `EXPIRED` dopo il deploy.
 
 ## Confirm senza ricevuta e rifiuti dei cittadini (console 21/11 ~04:00 locali, 200 percorsi)
 
