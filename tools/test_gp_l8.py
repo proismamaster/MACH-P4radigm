@@ -64,9 +64,16 @@ class SilentLedger:
 
 print("World lento")
 gp._PULL_PAUSE = 0.0
+REAL_WORLD_WAIT = gp._WORLD_WAIT
 gp._WORLD_WAIT = 0.0  # #135: the turn reads the history for world up to 180 s; this Ledger never answers
 got = asyncio.run(gp._gp_select_protocol(SilentLedger(), msg("ginocchio"), [], "citizen:t/c-1", "SYM-KNEE", None))
-check("senza world il GP non prescrive (red flag nascoste nel world)", got is None)
+# 04:18-05:12: 84 world of 84 without protocols or red flags, 7-9 minutes late; 13:30: 42 citizens of the
+# wave without a GP reply after 7 minutes. After the short wait the built-in table prescribes.
+check("senza world dopo l'attesa breve: ricetta dalla tabella interna", got == gp._PROTOCOLS["SYM-KNEE"])
+got = asyncio.run(gp._gp_select_protocol(SilentLedger(), msg("boh"), [], "citizen:t/c-1", "SYM-UNKNOWN", None))
+check("senza world e codice fuori tabella: nessuna ricetta", got is None)
+check("attesa del world breve (al massimo 30 s)", __import__("importlib").util is not None and REAL_WORLD_WAIT <= 30)
+check("world condiviso per un'ora (le ondate arrivano ogni 20 minuti)", gp._WORLD_SECONDS >= 3600)
 
 print("World condiviso per ondata (21/11: 84 world su 84 senza protocolli, Ledger a 7-9 minuti)")
 A, B = "citizen:W01QQQ-11-0001", "citizen:W01QQQ-11-0002"

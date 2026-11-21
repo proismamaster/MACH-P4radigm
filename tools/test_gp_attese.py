@@ -111,7 +111,7 @@ async def main():
     mod = importlib.util.module_from_spec(real)
     real.loader.exec_module(mod)
     check("valore vero: _RX_WAIT >= 420 s", getattr(mod, "_RX_WAIT", 0) >= 420)
-    check("valore vero: _WORLD_WAIT >= 180 s", getattr(mod, "_WORLD_WAIT", 0) >= 180)
+    check("valore vero: _WORLD_WAIT breve (<= 30 s, poi tabella interna)", 0 < getattr(mod, "_WORLD_WAIT", 0) <= 30)
 
     h = gp()
     h.mod._WORLD_WAIT, h.mod._WORLD_STEP = 5.0, 0.0
