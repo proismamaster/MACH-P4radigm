@@ -9,6 +9,26 @@
 
 **Prossimo passo**
 - Pubblicare alle 10:00 (non durante il livello 8: troppi deploy fanno perdere messaggi).
+## 2026-11-21 04:20 — Alberto (Hhapca, con Claude) — Consultorio 1.0.7 e correzioni del CUP in main
+
+**Fatto**
+- Consultorio online 1.0.7 (tutto in `main`, fc4493d): trust ring in modalità sicura (blocca solo chi non è nel ring né in `city.find` E manda `facility=` altrui o istruzioni, dalle 10:00), niente lettura della casella senza `need_id`, `need.request` senza criteri non è una ricerca (conformance), scadenze B/D in giorni di agenda, riprova del hold una volta su `EXPIRED`/`STALE_FENCE`, `rules` riletto per P2, codici del Ledger al CUP (`cancel reason=<minuscolo>` / `hold_refused ledger_code=`), rebook dopo `fault.cancel`, idempotenza di confirm e request_id.
+- CUP: 5 correzioni unite in `main` (6012ae3), NON pubblicate (online 1.0.20): orologio d'agenda senza weekend, catalogo fino a 20 pagine / ~60 s, anticipo minimo 1 ora con le 4 ore come preferenza + scadenza ricontrollata al confirm + `capacity=0` dei partner, cancel sempre con `offer_id` o frase semplice e niente date tardive dopo un rifiuto per `deadline`, giorni scritti a parole e rifiuti `day`/`gender` (test: `tools/test_cup_*.py`, 13 file verdi insieme).
+- `tools/test_facility.py`: prove per ruolo (consultorio C, E, H; ospedale A, B, D, F, G, I, E, H).
+
+**Dati (console, 200 percorsi, ~04:00 locali; letti dal sito con `/v1/team/journeys/<need_id>`)**
+- 6 done, 8 escalated, 95 failed, 91 open. GP: 102 `protocol_match +2`, risponde sempre. CUP: 70 `no_booking -1`, 6 `no_alternative -1`, 2 `false_attribute -2`.
+- Rifiuti dei cittadini: `deadline` 103, `past` 24, `gender` 14, `day` 8. Giorni e genere sono scritti a parole, mai in `days=`.
+- Dopo il confirm del cittadino (61 percorsi): 2 ricevute, 21 `facility_cancelled` (mediana 570 s), 34 silenzio, 4 cancel del consultorio (`EXPIRED` x3, `STALE_FENCE` x1).
+
+**Problemi**
+- Non confermata la causa dei confirm senza ricevuta per ospedale e specialist: servono i messaggi del Ledger (`held`, `refused ... code=`), che gli export non hanno. `/v1/team/agents/<id>/messages` esiste ma non rispondeva (sito sovraccarico, 504); `/v1/logs` dava `DRAINING`.
+- Elenco completo del ring (MACH-1.2) non nella repo: in `_RING` del consultorio 18 id.
+
+**Prossimo passo**
+- Pubblicare il CUP nella finestra 04:30-05:00 (entro le 05:30), con `city rollback agent:ez8cb7j167p2 --to 1.0.20` pronto; controllare `cup.find ... kept=` e i percorsi.
+- Alle 10:00: unire e pubblicare la #86 (impostori del CUP, si unisce senza conflitti con questi merge).
+- Riprovare a leggere i messaggi del Ledger quando il sito risponde; se `EXPIRED`/`STALE_FENCE` ci sono anche in ospedale e specialist, portare la riprova.
 
 ## 2026-11-21 03:55 — Andrei (Claude) — Livello 8: cittadini ostili e injection verificati
 

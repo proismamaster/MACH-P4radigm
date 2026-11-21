@@ -24,10 +24,15 @@ from time import monotonic
 from city_sdk.city import LEDGER, CapError, City, Message, Need, OutOfScope, Peer, clinical, understood
 
 ROLES = ("booking_centre", "gp", "hospital", "specialist_care", "family_counseling")
-_MAX_PAGE = 8
+# The catalogue is read one page at a time until a valid batch turns up: at most 20 pages and about
+# 60 real seconds per need (a valid slot on page 9 was never read when the cap was 8).
+_MAX_PAGE = 20
+_PAGING_SECONDS = 60.0
 # Four agenda hours is about half a minute of real time at 480x, so a slot is still
-# ahead when the citizen decides. One hour was already past by then.
+# ahead when the citizen decides: it is the PREFERRED lead, slots nearer than that come last. One
+# hour is the minimum: hold and commit take real time and an earlier slot expires before check-in.
 _LEAD = timedelta(hours=4)
+_MIN_LEAD = timedelta(hours=1)
 # Doctor key (the last segment of doctor_id) -> languages, gender, days. ``*`` is the ASST's
 # rare language. The Ledger's slot line names the doctor; it does not repeat this table.
 _OWN_RARE_LANGUAGE = "ti"
@@ -359,6 +364,19 @@ async def _until(
 _AGENDA_RATE = 60  # agenda minutes per real minute (/v1/team/wave "rate")
 
 
+def _agenda_add(start: datetime, delta: timedelta) -> datetime:
+    """``start`` plus ``delta`` of agenda time. The agenda has no weekend: Saturday and Sunday are
+    skipped, so Friday 23:00 plus two hours is Monday 01:00."""
+    out = start
+    while delta > timedelta(0):
+        midnight = (out + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        step = min(delta, midnight - out)
+        out, delta = out + step, delta - step
+        if out.weekday() >= 5:
+            out += timedelta(days=7 - out.weekday())
+    return out
+
+
 def _agenda_now(chat: list[Message], real_now: datetime | None = None) -> datetime | None:
     """The agenda clock now: the Ledger's last agenda_now plus the real time since that reply.
 
@@ -376,7 +394,7 @@ def _agenda_now(chat: list[Message], real_now: datetime | None = None) -> dateti
     if read is None:
         return at
     elapsed = (real_now or datetime.now(timezone.utc)) - read
-    return at + max(elapsed, timedelta(0)) * _AGENDA_RATE
+    return _agenda_add(at, max(elapsed, timedelta(0)) * _AGENDA_RATE)
 
 
 def _has_agenda(chat: list[Message]) -> bool:
@@ -428,7 +446,7 @@ def fitting(
         horizon = now.replace(hour=23, minute=59, second=59, microsecond=0)
     else:
         horizon = _agenda_horizon(now, _DEADLINE_DAYS.get(priority or "", 14))
-    earliest = now + _LEAD
+    earliest = now + _MIN_LEAD
     chosen: list[tuple[datetime, dict[str, str]]] = []
     for line in lines:
         slot = fields_of(line)
@@ -467,7 +485,7 @@ def fitting(
         if gender and spec[1] != gender:
             continue
         chosen.append((at, slot))
-    chosen.sort(key=lambda item: (item[0], item[1].get("slot_id", "")))
+    chosen.sort(key=lambda item: (item[0] < now + _LEAD, item[0], item[1].get("slot_id", "")))
     return [slot for _, slot in chosen]
 
 
@@ -597,7 +615,21 @@ def _lang(chat: list[Message], citizen: str) -> str:
     return "it"
 
 
+def _refused(chat: list[Message], citizen: str, reason: str) -> list[dict[str, str]]:
+    """Our offers the citizen turned down with ``cancel offer_id=... reason=<reason>``."""
+    shown = {o["offer_id"]: o for row in chat if row.sender != citizen for o in _offer_blocks(row.text)}
+    found = []
+    for row in chat:
+        if row.sender == citizen:
+            act, fields = _cup_input(row)
+            if act == "cancel" and fields.get("reason") == reason and fields.get("offer_id") in shown:
+                found.append(shown[fields["offer_id"]])
+    return found
+
+
 def _gender(chat: list[Message], citizen: str) -> str | None:
+    """The doctor's gender the citizen asked for; else the opposite of the one it refused with
+    ``reason=gender`` (the citizens never state it: console 21/11, journeys 255, 249, 225)."""
     for row in reversed(chat):
         if row.sender != citizen:
             continue
@@ -605,10 +637,38 @@ def _gender(chat: list[Message], citizen: str) -> str | None:
         raw = fields.get("gender_preference") or fields.get("gender")
         if isinstance(raw, str) and raw.lower() in {"m", "f"}:
             return raw.lower()
-    return None
+    refused = set()
+    for offer in _refused(chat, citizen, "gender"):
+        spec = _doctor_spec(offer.get("doctor_id", ""))
+        refused.add(spec[1] if spec else offer.get("doctor_gender", ""))
+    return {"m": "f", "f": "m"}.get(next(iter(refused)) if len(refused) == 1 else "")
+
+
+_IT_DAYS = {
+    "lunedi": "mon", "martedi": "tue", "mercoledi": "wed", "giovedi": "thu", "venerdi": "fri",
+    "monday": "mon", "tuesday": "tue", "wednesday": "wed", "thursday": "thu", "friday": "fri",
+}
 
 
 def _cup_days(chat: list[Message], citizen: str) -> set[str]:
+    """Days the citizen can come: days= first, else the weekdays named in its text ("solo lunedì o
+    mercoledì"), minus the weekdays of offers refused with ``reason=day``. Empty: no restriction."""
+    stated = _stated_days(chat, citizen) or _named_days(chat, citizen)
+    refused = {offer.get("agenda_day", "") for offer in _refused(chat, citizen, "day")} & _AGENDA_DAYS
+    left = (stated or set(_AGENDA_DAYS)) - refused
+    return left if refused and left else stated
+
+
+def _named_days(chat: list[Message], citizen: str) -> set[str]:
+    for row in reversed(chat):
+        if row.sender == citizen and "cancel" not in words(row.text):
+            found = {_IT_DAYS[w] for w in re.findall(r"[a-z]+", row.text.lower().replace("ì", "i")) if w in _IT_DAYS}
+            if found:
+                return found
+    return set()
+
+
+def _stated_days(chat: list[Message], citizen: str) -> set[str]:
     for row in reversed(chat):
         if row.sender != citizen:
             continue
@@ -674,6 +734,7 @@ class _Sent:
 
     __slots__ = (
         "offers", "trigger", "again", "outbox", "uncertain_confirmation", "partner_search_started", "stale_reads",
+        "paging_started",
     )
 
     def __init__(self) -> None:
@@ -685,6 +746,7 @@ class _Sent:
         self.partner_search_started: float | None = None
         # Ledger agenda/slots answers read before a P1 renewal: stale once the renewal is asked.
         self.stale_reads: set[str] = set()
+        self.paging_started: float | None = None
 
 
 # Turns of the same need may overlap. Keep state-changing CUP turns serial and
@@ -982,6 +1044,14 @@ async def _cup_confirm(
     expected = {"slot_id": slot, "facility": facility, "prescription_number": number, "citizen": citizen}
     if any(key in fields and fields[key] != value for key, value in expected.items()):
         return
+    # The slot may have come within the minimum lead while the citizen decided: ask again.
+    at, now = _when(offer.get("agenda_date", "")), _agenda_now(chat)
+    if at is not None and now is not None and at <= now + _MIN_LEAD:
+        await _cup_cancel(
+            city, message, chat, cache, citizen,
+            f"cancel offer_id={offer_id} reason=slot_expired Questo orario è appena passato.",
+        )
+        return
     partner_id = offer.get("partner_offer_id")
     if partner_id and state.cross_asst_declined:
         return
@@ -1149,7 +1219,7 @@ def _cup_partner_slots(
         horizon = now.replace(hour=23, minute=59, second=59, microsecond=0)
     else:
         horizon = _agenda_horizon(now, _DEADLINE_DAYS[priority])
-    earliest = now + _LEAD
+    earliest = now + _MIN_LEAD
     for row in chat:
         request_id = searches.get(row.sender)
         if not request_id:
@@ -1183,7 +1253,7 @@ def _cup_partner_slots(
                 continue
             if fields.get("priority", priority) != priority:
                 continue
-            free = fields.get("free", "1")
+            free = fields.get("free", fields.get("capacity", "1"))
             if not free.isdecimal() or int(free) <= 0:
                 continue
             reserved = fields.get("urgent_reserve", "").lower() == "true" or fields.get("reserve", "").upper() == "U"
@@ -1224,7 +1294,10 @@ def _cup_partner_slots(
                 "procedure": procedure, "at": fields["agenda_date"], "day": day,
                 "expiry": fields.get("expiry") or fields["agenda_date"], "partner_offer_id": offer_id, "request_id": request_id,
             }
-    return sorted(slots.values(), key=lambda slot: (_when(slot["at"]), slot["slot_id"])), answered
+    ordered = sorted(
+        slots.values(), key=lambda slot: (_when(slot["at"]) < now + _LEAD, _when(slot["at"]), slot["slot_id"])
+    )
+    return ordered, answered
 
 
 async def _cup_cross_asst(
@@ -1292,21 +1365,41 @@ async def _cup_cross_asst(
         )
         return
     reason = "partner_unavailable" if pending else "no_slots"
-    if not _we(chat, city.agent_id, f"reason={reason}", to=citizen, word="cancel"):
-        await _cup_send(
-            city, message, cache, citizen,
-            f"cancel reason={reason} Non ho trovato orari confermabili entro i tempi della sua priorità. "
-            "Se può indicarmi altri giorni o orari che le vanno bene, riprovo subito.",
-        )
+    notice = _no_slots_text(next(iter(_cup_case(chat, city.agent_id, citizen).offers), ""), reason)
+    said = any(_we(chat, city.agent_id, f"reason={code}", to=citizen, word="cancel")
+               for code in ("partner_unavailable", "no_slots"))
+    if not said and not _exact(chat, city.agent_id, notice):
+        await _cup_send(city, message, cache, citizen, notice)
+
+
+def _no_slots_text(open_offer: str, reason: str) -> str:
+    """No slot to propose. A cancel always names the offer it cancels (without it the citizen asks
+    "Which offer_id?"); with no offer open it is a plain sentence with no act word."""
+    sentence = (
+        "Non ho trovato orari confermabili entro i tempi della sua priorità. "
+        "Se può indicarmi altri giorni o orari che le vanno bene, riprovo subito."
+    )
+    return f"cancel offer_id={open_offer} reason={reason} {sentence}" if open_offer else sentence
+
+
+def _deadline_refused(chat: list[Message], citizen: str) -> bool:
+    """The citizen refused an offer for its deadline: later dates are no alternative."""
+    return any(
+        row.sender == citizen and "cancel" in words(row.text) and "deadline" in words(row.text.replace("=", " "))
+        for row in chat
+    )
 
 
 def _cup_relaxed(
     lines: list[str], *, now: datetime, lang: str, gender: str | None, procedure: str,
-    priority: str | None = None,
+    priority: str | None = None, widen: bool = True,
 ) -> list[dict[str, str]]:
-    """Try other weekdays within the priority window, then widen only the window."""
+    """Try other weekdays within the priority window, then widen only the window (not after a
+    refusal for the deadline: a later date is exactly what the citizen refused)."""
     within_window = fitting(lines, now=now, priority=priority, lang=lang, gender=gender, procedure=procedure)
-    return within_window or fitting(
+    if within_window or not widen:
+        return within_window
+    return fitting(
         lines, now=now, priority=priority, lang=lang, gender=gender, procedure=procedure, relax_window=True,
     )
 
@@ -1324,7 +1417,11 @@ async def _cup_offer_batch(
         instruction = f"{note} {instruction}"
     options = []
     delivered = set()
-    for index, slot in enumerate(slots[:3], 1):
+    # One slot per weekday first: three offers on three days beat three on a single day the citizen
+    # may not have (reason=day refusals, console 21/11).
+    seen = set()
+    first = [slot for slot in slots if not (slot.get("day") in seen or seen.add(slot.get("day")))]
+    for index, slot in enumerate([*first, *(slot for slot in slots if slot not in first)][:3], 1):
         line = _offer_line(slot, number, priority, offer_id=f"of-{batch}-{index}")
         if note:
             line += " relaxed=true"
@@ -1483,7 +1580,12 @@ async def _advance_alone(
     if taken and not replacing:
         return
     missing_page = next((page for page in range(1, page_count + 1) if page not in snapshots), None)
+    if missing_page is not None and sent.paging_started is not None:
+        if monotonic() - sent.paging_started > _PAGING_SECONDS:
+            missing_page = None  # long enough: go on with the pages already read
     if missing_page is not None:
+        if sent.paging_started is None:
+            sent.paging_started = monotonic()
         if not _asked(catalogue_chat, agent, procedure, missing_page):
             await _cup_send(city, message, sent, LEDGER, f"world procedure={procedure} page={missing_page}")
         # A Ledger reply does not open a turn: wait for the page here and go on in this turn,
@@ -1500,6 +1602,7 @@ async def _advance_alone(
     if number and procedure in _CUP_SERVICES and priority in {"U", "B", "D"}:
         relaxed = _cup_relaxed(
             lines, now=now, lang=language, gender=gender, procedure=procedure, priority=priority,
+            widen=not _deadline_refused(chat, citizen),
         )
         if case.cross_asst_declined:
             if relaxed:

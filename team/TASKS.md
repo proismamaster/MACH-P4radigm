@@ -35,6 +35,15 @@ Livello 5 «Vincoli combinati»: priorità, lingue e disponibilità si sovrappon
 | Console: ogni 20 minuti tabella dei percorsi falliti e aperti del livello 5 (need_id, agente, causa, testo vero) in `team/PROBLEMS.md` | Sonnet (PC di Ismail) | `team/PROBLEMS.md` | da fare | `sonnet/console-l5` |
 | Deploy, review delle PR, specialist follow-up | Claude (Opus) | `asst/specialist/`, card | in corso | — |
 
+## Chiusura (21/11 04:20) — Alberto
+
+| Compito | Stato | Branch / PR |
+|---|---|---|
+| Consultorio: L6-L8, trust ring (modalità sicura), conformance, riprova del hold, scadenze in giorni di agenda | online 1.0.7, in `main` | `hapca/consultorio-riprova-hold`, `hapca/trust-ring` |
+| CUP: orologio, paging, anticipo minimo, cancel con id, rifiuti day/gender | in `main`, da pubblicare (04:30-05:00) | `hapca/cup-orologio`, `-pagine`, `-lead`, `-deadline`, `-rifiuti-day-gender` |
+| CUP: impostori (#86) | da unire e pubblicare alle 10:00 | `andrei/cup-impostori` |
+| Ospedale e specialist: riprova su `EXPIRED`/`STALE_FENCE` | solo se i messaggi del Ledger lo confermano | — |
+
 ## Deploy
 
 Fino all'1:00 pubblicano solo Abed o Ismail, nelle finestre di Down, un agente alla volta, annunciando nel gruppo. Procedura in `AI.md`.

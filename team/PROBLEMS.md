@@ -1,6 +1,24 @@
 
 # Problemi
 
+## Confirm senza ricevuta e rifiuti dei cittadini (console 21/11 ~04:00 locali, 200 percorsi)
+
+Dati dal sito: `/v1/team/journeys` e `/v1/team/journeys/<need_id>`, con il login della squadra. Orari UTC.
+
+| Cosa | Numeri | Stato |
+|---|---|---|
+| Confirm del cittadino, poi ricevuta | 2 su 61 | aperto |
+| Dopo il confirm: `facility_cancelled` dal CUP | 21 (mediana 570 s, max 1076 s) | causa non confermata per ospedale e specialist |
+| Dopo il confirm: nessuna risposta | 34 | aperto |
+| Consultorio dopo il confirm: `cancel EXPIRED` / `STALE_FENCE` | 3 / 1 | riprova del hold in 1.0.7, da verificare in console |
+| Rifiuti per `deadline` / `past` / `gender` / `day` | 103 / 24 / 14 / 8 | CUP: correzioni in `main`, non pubblicate |
+| CUP `no_booking -1` | 70 | come sopra |
+
+- **Giorni e genere sono scritti a parole**: "posso venire solo lunedì o mercoledì", "solo in alcuni giorni". Mai `days=`. Con `reason=day` o `reason=gender` il cittadino rifiuta; il CUP non ne teneva conto e offriva tre slot dello stesso giorno (221, 255, 249, 244, 225, 210, 100002). Correzione: `hapca/cup-rifiuti-day-gender` (in `main`).
+- **Consultorio, 5 percorsi su 8**: confirm, poi `cancel reason=EXPIRED` o `STALE_FENCE` dal Ledger (256, 229, 248, 2160002, 216 con `receipt_refused -2`). Riprova del hold una volta (1.0.7). Non si vedono i messaggi del Ledger: ipotesi del polling di 6 s troppo breve, non provata.
+- **Latenza delle strutture di 8-14 minuti**: coincide con le ore di chiusura (`Strutture chiuse, orario 08:00-18:00`, un minuto reale = un'ora d'agenda); vale per tutte le squadre.
+- Per confermare le cause: salvare dal pannello "Apri i log" un percorso fresco dopo il confirm, oppure leggere `/v1/team/agents/<id>/messages` quando il sito risponde.
+
 ## Livello 5/6 (console, 21/11 dalle 00:30 UTC = 01:30 locali)
 
 Wave W01QQQ, `level 5`, `agenda_now` 19/11 (giovedì). Console: 200 percorsi, 80 `failed`, 26 `open`, 52 `done`. 52 percorsi `failed`/`open` aggiornati negli ultimi 20 minuti, letti uno alla volta (`/v1/team/journeys/<need_id>`): 47 letti, 5 in timeout. Orari UTC. `S` = `answer_set` effective/size del verdetto. Nomi dei percorsi = ultime 6 cifre dell'id.
