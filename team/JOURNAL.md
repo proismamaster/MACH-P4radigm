@@ -1,5 +1,15 @@
 # Journal (la voce più recente in alto)
 
+## 2026-11-21 04:15 — Andrei (Claude) — CUP: protezione dagli impostori (pronta, da pubblicare alle 10:00)
+
+**Fatto**
+- Le offerte dei partner erano già controllate (solo da chi abbiamo interrogato, `request_id`, `facility` = mittente, procedura, priorità, scadenza, riserva U, lingua/genere/giorni del medico dalla tabella). Il buco era la scelta dei partner da `city.find`: bastava la capability.
+- `_cup_trusted_peers`: ruolo della famiglia giusta (fisiatria: hospital/facility; cardiologia: specialist_care/specialist/facility), `no_clinical_advice` dichiarato (solo se l'Index riporta il campo per qualcuno, così non svuota mai la lista), reputazione più alta prima. Le strutture dell'anello da Discord restano.
+- Test: `tools/test_cup_impostori.py` (nuovo, 3 casi falliscono su main, 2 di controllo). Verdi tutti i test del CUP, `test_l8_ostili`, `test_fix`.
+
+**Prossimo passo**
+- Pubblicare alle 10:00 (non durante il livello 8: troppi deploy fanno perdere messaggi).
+
 ## 2026-11-21 03:55 — Andrei (Claude) — Livello 8: cittadini ostili e injection verificati
 
 **Fatto**

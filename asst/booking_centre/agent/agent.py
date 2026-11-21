@@ -21,7 +21,7 @@ from pathlib import Path
 from secrets import token_hex
 from time import monotonic
 
-from city_sdk.city import LEDGER, CapError, City, Message, Need, OutOfScope, clinical, understood
+from city_sdk.city import LEDGER, CapError, City, Message, Need, OutOfScope, Peer, clinical, understood
 
 ROLES = ("booking_centre", "gp", "hospital", "specialist_care", "family_counseling")
 _MAX_PAGE = 8
@@ -118,6 +118,32 @@ def _cup_partner_candidates(found: list[str], service: str, local: set[str], lan
     known = [row[column] for row in ring if row[column]]
     ordered = dict.fromkeys([*known, *found])
     return [agent for agent in ordered if agent not in local and _CUP_TOKEN.fullmatch(agent)][:_CUP_MAX_PARTNERS]
+
+# Impostors (Saturday from 10:00): agents built to mislead the network. A partner found with city.find
+# gets the search criteria and its offers reach the citizen, so an impostor there can sell fake slots.
+# The Index reports facilities with their family as role ("hospital", "specialist"...), not "facility":
+# filtering on "facility" alone dropped all 26 peers (log cup.find, 00:44).
+_CUP_PARTNER_ROLES = {
+    "hospital.physiatry": {"hospital", "facility"},
+    "specialist_care.cardiology": {"specialist_care", "specialist", "facility"},
+}
+
+
+def _cup_trusted_peers(peers: list[Peer], service: str) -> list[str]:
+    """Index peers that can be the facility for ``service``: the capability, a role of that family,
+    and the no_clinical_advice every real card declares (only when the Index reports the field
+    for someone, so a missing field never empties the list). Highest reputation first."""
+    roles = _CUP_PARTNER_ROLES.get(service, {"facility"})
+    candidates = [
+        peer for peer in peers
+        if service in peer.capabilities and peer.agent_id.startswith("agent:")
+        and (not peer.role or peer.role.lower() in roles)
+    ]
+    if any(peer.no_clinical_advice for peer in candidates):
+        candidates = [peer for peer in candidates if peer.no_clinical_advice]
+    candidates.sort(key=lambda peer: -float(peer.reputation or 0))
+    return [peer.agent_id for peer in candidates]
+
 
 _CUP_PARTNER_REPLY_SECONDS = 20
 
@@ -1215,12 +1241,7 @@ async def _cup_cross_asst(
         except CapError:
             peers = []
         local = _cup_local_facilities(chat) | {city.agent_id}
-        found = [
-            peer.agent_id for peer in peers
-            # The Index reports facilities with their family as role ("hospital", "specialist"...),
-            # not "facility": filtering on role dropped all 26 peers (log cup.find, 00:44).
-            if service in peer.capabilities and peer.agent_id.startswith("agent:")
-        ]
+        found = _cup_trusted_peers(peers, service)
         _LOG.warning(
             "cup.find need=%s service=%s peers=%d kept=%d sample=%s", message.need_id, service, len(peers), len(found),
             [(peer.agent_id, peer.role, list(peer.capabilities)[:3]) for peer in peers[:4]],
