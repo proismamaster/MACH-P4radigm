@@ -18,6 +18,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
+from time import monotonic
 
 from city_sdk.city import LEDGER, CapError, City, Message, Need, OutOfScope, clinical, understood
 
@@ -421,12 +422,36 @@ def _gp_world_emergency(chat: list[Message], citizen: str) -> bool:
 
 
 def _gp_world_received(chat: list[Message]) -> bool:
-    return any(
-        row.sender == LEDGER
-        and (first_word(row.text) in {"world", "slots", "catalogue", "protocol", "protocols"}
-             or isinstance(row.body.get("protocols"), list))
-        for row in chat
+    return any(_gp_is_world(row) for row in chat)
+
+
+def _gp_is_world(row: Message) -> bool:
+    return row.sender == LEDGER and (
+        first_word(row.text) in {"world", "slots", "catalogue", "protocol", "protocols"}
+        or isinstance(row.body.get("protocols"), list)
     )
+
+
+# Console 21/11 04:18-05:12: 84 world replies out of 84 were a slot page with no protocol table and no
+# red flag, and the Ledger answered 7-9 real minutes after the request: waiting for world before every
+# prescription cost each citizen a Ledger round trip (agenda hours of its B window). The world is the same
+# for the whole wave, so one reading serves every citizen of that wave for ten minutes.
+_WORLD_SECONDS = 600
+_WORLD: dict[str, tuple[list[Message], float]] = {}
+
+
+def _gp_shared_world(chat: list[Message], citizen: str) -> list[Message]:
+    """Remember this case's world for its wave; without one, put the wave's recent world before the chat."""
+    wave = citizen.removeprefix("citizen:").split("-", 1)[0]
+    own = [row for row in chat if _gp_is_world(row)
+           and fields_of(row.text.splitlines()[0] if row.text else "").get("wave_id") == wave]
+    if own:
+        _WORLD[wave] = (own, monotonic())
+        return chat
+    if _gp_world_received(chat) or wave not in _WORLD:
+        return chat
+    rows, read = _WORLD[wave]
+    return [*rows, *chat] if monotonic() - read <= _WORLD_SECONDS else chat
 
 
 def _gp_ledger_rx(chat: list[Message], number: str, *, heads: set[str]) -> Message | None:
@@ -481,6 +506,7 @@ async def _gp(city: City, message: Message, chat: list[Message], *, urgent: bool
     citizen = next((row.sender for row in chat if row.sender.startswith("citizen:")), None)
     if citizen is None or message.sender not in {citizen, LEDGER}:
         return
+    chat = _gp_shared_world(chat, citizen)
     agent = city.agent_id
     if _we(chat, agent, "escalate.emergency", to=citizen, word="escalate.emergency"):
         return
@@ -516,7 +542,7 @@ async def _gp(city: City, message: Message, chat: list[Message], *, urgent: bool
         protocol = await _gp_select_protocol(city, message, chat, citizen, code, renewal)
         # Level 8 hides red flags: the protocol table in world lists them per symptom.
         try:
-            fresh = _gp_case(await city.history(need_id=message.need_id), message)
+            fresh = _gp_shared_world(_gp_case(await city.history(need_id=message.need_id), message), citizen)
         except CapError:
             fresh = chat
         if not renewal and _gp_world_emergency(fresh, citizen):

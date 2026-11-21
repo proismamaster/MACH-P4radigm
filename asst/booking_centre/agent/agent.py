@@ -103,7 +103,17 @@ _CUP_SERVICES = {
     "CTRL-CARD": "specialist_care.cardiology",
 }
 _CUP_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}")
-_CUP_MAX_PARTNERS = 30  # 26 ASST in the ring (MACH-1.2): the six known ones replied no_availability
+# Console 21/11 04:43-05:09: 22 searches asked 25 partners each (550 messages and about 500 replies, each
+# one a turn of ours); seven partners sent the 45 offers and one offer reached a citizen. Ask at most six,
+# the ones that offer first.
+_CUP_MAX_PARTNERS = 6
+_CUP_PRODUCTIVE = {
+    "hospital.physiatry": (
+        "agent:r8njm9a6c7pv", "agent:darwa6412gz0", "agent:x0vr9rbwpesr", "agent:m6py14a1ej77", "agent:gxq3vzgt3h5t",
+    ),
+    "specialist_care.cardiology": ("agent:h6krzxx6es83", "agent:hnpe58epeyh1"),
+}
+_PARTNER_GOOD: dict[str, dict[str, None]] = {}  # service -> partners whose offer fitted a citizen here
 # Level 4: facilities other teams published on the event Discord (21/11, 00:00-00:40), with the
 # rare language of their h3. city.find alone did not bring partner offers (journeys 153, 165, 166:
 # answer set not empty, no partner slot). Only search criteria travel before the cross_asst consent.
@@ -129,7 +139,10 @@ def _cup_partner_candidates(found: list[str], service: str, local: set[str], lan
     column = _CUP_RING_COLUMN.get(service)
     ring = [] if column is None else sorted(_CUP_RING, key=lambda row: row[0] != language)
     known = [row[column] for row in ring if row[column]]
-    ordered = dict.fromkeys([*known, *found])
+    speaker = [row[column] for row in ring if row[column] and row[0] and row[0] == language]
+    learned = list(_PARTNER_GOOD.get(service, {}))
+    productive = [agent for agent in _CUP_PRODUCTIVE.get(service, ()) if agent in found]  # still in the Index
+    ordered = dict.fromkeys([*speaker, *learned, *productive, *found, *known])
     return [agent for agent in ordered if agent not in local and _CUP_TOKEN.fullmatch(agent)][:_CUP_MAX_PARTNERS]
 
 _CUP_PARTNER_REPLY_SECONDS = 20
@@ -538,6 +551,65 @@ def _page(text: str) -> tuple[int, int]:
     if left.isdigit() and right.isdigit():
         return int(left), int(right)
     return 1, 1
+
+
+# Console 21/11 05:00-05:15: the Ledger answered agenda, prescription and world 7-9 real minutes after
+# the request (CUP, GP and consultorio alike) and the reply opened our next turn 6-7 minutes later: each
+# read costs agenda hours. The agenda clock and the slot pages are the same for every need of a wave, so
+# a reading made for one need serves the others for a few minutes.
+_SHARED_SECONDS = 300
+_SHARED: dict[tuple[str, str], tuple[Message, datetime]] = {}
+_PAGE_BURST = 6  # missing catalogue pages asked in one turn, not one page per Ledger round trip
+
+
+def _wave(party: str) -> str:
+    return party.removeprefix("citizen:").split("-", 1)[0]
+
+
+def _shared_key(row: Message) -> tuple[str, str] | None:
+    """(wave, "agenda") or (wave, "<procedure> p<page>") for a Ledger agenda or slot page."""
+    lines = row.text.splitlines()
+    top = fields_of(lines[0]) if lines and row.sender == LEDGER else {}
+    wave, head = top.get("wave_id", ""), first_word(row.text)
+    if not wave:
+        return None
+    if head == "agenda" and _when(top.get("agenda_now", "")) is not None and top.get("paused") != "true":
+        return wave, "agenda"
+    procedures = {fields_of(line).get("procedure") for line in lines[1:]} - {None}
+    if head == "slots" and len(procedures) == 1:
+        return wave, f"{procedures.pop()} p{_page(row.text)[0]}"
+    return None
+
+
+def _shared_reads(chat: list[Message], citizen: str, procedure: str | None) -> list[Message]:
+    """Remember this need's agenda and slot pages; put before the chat the ones other needs of the same
+    wave read in the last few minutes and this need lacks (its own readings come later and win)."""
+    wave, now, have = _wave(citizen), datetime.now(timezone.utc), set()
+    for row in chat:
+        key = _shared_key(row)
+        if key is None or key[0] != wave:
+            continue
+        have.add(key)
+        read = _when(row.sent_at or "") or now
+        if key not in _SHARED or _SHARED[key][1] <= read:
+            _SHARED[key] = (row, read)
+    shared = [
+        row for (owner, kind), (row, read) in _SHARED.items()
+        if owner == wave and (owner, kind) not in have and now - read <= timedelta(seconds=_SHARED_SECONDS)
+        and (kind == "agenda" or (procedure is not None and kind.startswith(procedure + " p")))
+    ]
+    return [*shared, *chat] if shared else chat
+
+
+_CUP_HINT = {"hospital.physiatry": "VIS-FIS", "specialist_care.cardiology": "VIS-CARD"}
+
+
+def _procedure_hint(chat: list[Message], citizen: str) -> str | None:
+    """The procedure the citizen's service_type points to, to read the catalogue with the prescription."""
+    for row in reversed(chat):
+        if row.sender == citizen and (hint := _CUP_HINT.get(fields_of(row.text).get("service_type", ""))):
+            return hint
+    return None
 
 
 def _asked(chat: list[Message], agent: str, procedure: str, page: int) -> bool:
@@ -951,6 +1023,7 @@ async def _booking_centre(city: City, message: Message, chat: list[Message]) -> 
     citizen = next((row.sender for row in chat if row.sender.startswith("citizen:")), None)
     if citizen is None:
         return
+    chat = _shared_reads(chat, citizen, None)  # the agenda clock, for the confirm check too
 
     state = _cup_case(chat, city.agent_id, citizen)
     act, fields = _cup_input(message)
@@ -1335,7 +1408,8 @@ async def _cup_cross_asst(
 ) -> None:
     service = _CUP_SERVICES[procedure]
     searches = _cup_searches(chat, city.agent_id)
-    if not searches and cache.partner_search_started is None:
+    started_here = not searches and cache.partner_search_started is None
+    if started_here:
         cache.partner_search_started = monotonic()
         try:
             peers = await city.find(service)
@@ -1378,12 +1452,16 @@ async def _cup_cross_asst(
         return _cup_partner_slots(case, searches, procedure, priority, now, citizen, taken)
 
     offers, answered = collect(chat)
-    if searches.keys() - answered:
+    # Only the turn that sent the searches waits for replies: every reply opens its own turn, and a
+    # reply turn that polls holds the need's lock while the other replies queue behind it.
+    if started_here and searches.keys() - answered:
         fresh = await _until(
             city, message.need_id, chat,
             lambda rows: not (searches.keys() - collect(rows)[1]), max_polls=6,
         )
         offers, answered = collect(fresh)
+    for slot in offers:
+        _PARTNER_GOOD.setdefault(service, {})[slot["facility"]] = None
     _LOG.warning(
         "cup.partners need=%s asked=%d answered=%d usable_offers=%d now=%s priority=%s",
         message.need_id, len(searches), len(answered), len(offers), now.isoformat(), priority,
@@ -1536,8 +1614,14 @@ async def _advance_alone(
             lookup = f"prescription prescription_number={number}"
             if not any(row.sender == agent and row.recipient == LEDGER and row.text == lookup for row in chat):
                 await _cup_send(city, message, sent, LEDGER, lookup)
-            if not _exact(fresh(chat), agent, "agenda"):
+            # Agenda and the first catalogue page travel with the prescription lookup, unless another
+            # need of this wave read them a moment ago: one Ledger round trip instead of two.
+            hint = _procedure_hint(chat, citizen)
+            known = _shared_reads(fresh(chat), citizen, hint)
+            if _agenda_now(known) is None and not _exact(fresh(chat), agent, "agenda"):
                 await _cup_send(city, message, sent, LEDGER, "agenda")
+            if hint and _latest_slots(known) is None and not _asked(chat, agent, hint, 1):
+                await _cup_send(city, message, sent, LEDGER, f"world procedure={hint} page=1")
             chat = await _until(
                 city,
                 message.need_id,
@@ -1548,7 +1632,7 @@ async def _advance_alone(
             continue
         if not procedure:
             return
-        agenda = _ledger(fresh(chat), "agenda")
+        chat = _shared_reads(chat, citizen, procedure)
         now = _agenda_now(fresh(chat))
         world = _latest_slots(fresh(chat))
         if now is not None and world is not None:
@@ -1623,8 +1707,10 @@ async def _advance_alone(
     if missing_page is not None:
         if sent.paging_started is None:
             sent.paging_started = monotonic()
-        if not _asked(catalogue_chat, agent, procedure, missing_page):
-            await _cup_send(city, message, sent, LEDGER, f"world procedure={procedure} page={missing_page}")
+        missing = [page for page in range(missing_page, page_count + 1) if page not in snapshots]
+        for page in missing[:_PAGE_BURST]:
+            if not _asked(catalogue_chat, agent, procedure, page):
+                await _cup_send(city, message, sent, LEDGER, f"world procedure={procedure} page={page}")
         # A Ledger reply does not open a turn: wait for the page here and go on in this turn,
         # otherwise the case stalls until another message arrives (3-5 real minutes, 197, 1220004).
         def pages_read(rows: list[Message]) -> int:

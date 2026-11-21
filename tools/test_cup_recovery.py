@@ -344,7 +344,8 @@ class CupRecoveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_cross_asst_history_keeps_send_order_when_one_search_is_missing(self):
         case = Case(self.brain, "partial-relay-history")
         await case.receive_remote_offer()
-        (search,) = case.out(PARTNER, "need.request")
+        # A search after the first one of the turn (the partner from city.find is now asked first).
+        search = [row for row in case.sent if row.text.startswith("need.request")][1]
         case.hidden_from_history.add(search.msg_id)
 
         relay_rows = await case.history(peer=None, need_id=case.need_id)

@@ -533,6 +533,56 @@ def _page(text: str) -> tuple[int, int]:
     return 1, 1
 
 
+# Console 21/11 05:00-05:15: the Ledger answered agenda and world 7-9 real minutes after the request and
+# our first offer reached the citizen about ten minutes after its message. The agenda clock and the slot
+# pages are the same for every case of a wave: a reading made for one case serves the others for five
+# minutes (a hold on a slot taken in the meantime is refused and the next offers follow).
+_SHARED_SECONDS = 300
+_SHARED: dict[tuple[str, str], tuple[Message, datetime]] = {}
+_LAST_WAVE: list[str] = [""]  # the wave of the latest shared reading, for searches with no citizen
+
+
+def _shared_key(row: Message) -> tuple[str, str] | None:
+    """(wave, "agenda") or (wave, "<procedure> p<page>") for a Ledger agenda or slot page."""
+    lines = row.text.splitlines()
+    top = fields_of(lines[0]) if lines and row.sender == LEDGER else {}
+    wave, head = top.get("wave_id", ""), first_word(row.text)
+    if not wave:
+        return None
+    if head == "agenda" and _when(top.get("agenda_now", "")) is not None and top.get("paused") != "true":
+        return wave, "agenda"
+    procedures = {fields_of(line).get("procedure") for line in lines[1:]} - {None}
+    if head == "slots" and len(procedures) == 1:
+        return wave, f"{procedures.pop()} p{_page(row.text)[0]}"
+    return None
+
+
+def _shared_reads(chat: list[Message], wave: str, procedure: str, *, first_page: bool = False) -> list[Message]:
+    """Remember this case's agenda and slot pages; put before the chat what the other cases of the
+    wave read in the last minutes and this case lacks (its own readings come later and win)."""
+    now, have = datetime.now(timezone.utc), set()
+    for row in chat:
+        key = _shared_key(row)
+        if key is None:
+            continue
+        _LAST_WAVE[0] = key[0]
+        have.add(key)
+        read = _when(row.sent_at or "") or now
+        if key not in _SHARED or _SHARED[key][1] <= read:
+            _SHARED[key] = (row, read)
+    if not wave:
+        return chat
+    if first_page and any(owner == wave and kind.startswith(procedure + " p") for owner, kind in have):
+        return chat  # the case pages forward from its own reading
+    wanted = {"agenda", f"{procedure} p1"} if first_page else None
+    shared = [
+        row for (owner, kind), (row, read) in _SHARED.items()
+        if owner == wave and (owner, kind) not in have and now - read <= timedelta(seconds=_SHARED_SECONDS)
+        and (kind in wanted if wanted else (kind == "agenda" or kind.startswith(procedure + " p")))
+    ]
+    return [*shared, *chat] if shared else chat
+
+
 def _asked(chat: list[Message], agent: str, procedure: str, page: int) -> bool:
     token = f"page={page}"
     proc = f"procedure={procedure}"
@@ -735,7 +785,9 @@ async def _advance_alone(
     # read the reply from history: the push of a ledger message does not open a turn.
     procedure, priority, number = fixed, None, None
     now = world = None
+    wave = citizen.removeprefix("citizen:").split("-", 1)[0]
     for _pass in range(3):
+        chat = _shared_reads(chat, wave, procedure, first_page=True)
         now = _agenda_now(chat)
         world = _latest_slots(chat)
         if now is not None and world is not None:
@@ -854,7 +906,8 @@ async def _confirm_once(
     # close to hold and commit, is answered with reason=past and new offers (console 21/11: the
     # citizen confirmed 20 minutes after the offer and the Ledger refused the hold with EXPIRED).
     at = _when(offer.get("agenda_date", "") or offer.get("at", ""))
-    now = _agenda_now(chat)
+    wave = message.sender.removeprefix("citizen:").split("-", 1)[0] if message.sender.startswith("citizen:") else _LAST_WAVE[0]
+    now = _agenda_now(_shared_reads(chat, wave, "", first_page=True))  # the offer may have used a shared clock
     if at is not None and now is not None and at <= now + _HOLD_MARGIN:
         if not _we(chat, agent, f"slot_id={slot}", to=message.sender, word="cancel"):
             ids = (f"offer_id={offer_id} " if offer_id else "") + f"slot_id={slot}"
@@ -1600,6 +1653,7 @@ async def _answer_search(
         return
     priority = (fields.get("priority") or "").upper() or None
 
+    chat = _shared_reads(chat, _LAST_WAVE[0], procedure)  # MACH-1.3 wants the answer within 10 s
     world = _latest_slots_for(chat, procedure)
     now = _agenda_now(chat)
     if world is None or now is None:

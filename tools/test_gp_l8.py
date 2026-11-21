@@ -67,5 +67,27 @@ gp._PULL_PAUSE = 0.0
 got = asyncio.run(gp._gp_select_protocol(SilentLedger(), msg("ginocchio"), [], "citizen:t/c-1", "SYM-KNEE", None))
 check("senza world il GP non prescrive (red flag nascoste nel world)", got is None)
 
+print("World condiviso per ondata (21/11: 84 world su 84 senza protocolli, Ledger a 7-9 minuti)")
+A, B = "citizen:W01QQQ-11-0001", "citizen:W01QQQ-11-0002"
+world = Message(type="chat", sender=gp.LEDGER, recipient="agent:t/gp", msg_id="w1", need_id="N-A",
+                body={"text": "slots wave_id=W01QQQ asst=asst-bicocca page=1/18\nslot_id=S1 procedure=VIS-FIS"})
+gp._WORLD.clear()
+gp._gp_shared_world([world], A)
+mine = Message(type="chat", sender=B, recipient="agent:t/gp", msg_id="b1", need_id="N-B", body={"text": "mal di schiena"})
+chat_b = gp._gp_shared_world([mine], B)
+check("un altro cittadino della stessa ondata riceve il world gia' letto", chat_b[0] is world)
+got = asyncio.run(gp._gp_select_protocol(SilentLedger(), mine, chat_b, B, "SYM-BACK", None))
+check("con il world dell'ondata prescrive subito (nessuna attesa)", got == ("VIS-FIS", "B"))
+check("un'altra ondata non lo riceve", gp._gp_shared_world([mine], "citizen:W02ZZZ-11-0001") == [mine])
+flagged = Message(type="chat", sender=gp.LEDGER, recipient="agent:t/gp", msg_id="w2", need_id="N-A",
+                  body={"text": "world wave_id=W01QQQ\nsymptom_code=SYM-BACK procedure=VIS-FIS priority=B "
+                                "red_flags=formicolio_alla_sella"})
+gp._WORLD.clear()
+gp._gp_shared_world([flagged], A)
+red = Message(type="chat", sender=B, recipient="agent:t/gp", msg_id="b2", need_id="N-B",
+              body={"text": "mal di schiena e formicolio alla sella"})
+check("le red flag del world condiviso valgono anche per gli altri", gp._gp_world_emergency(gp._gp_shared_world([red], B), B))
+gp._WORLD.clear()
+
 print("FALLITE:", FAILS if FAILS else "nessuna")
 sys.exit(1 if FAILS else 0)
