@@ -1,7 +1,7 @@
 agent_id: agent:sh35cbsy287d
 team: team:p4radigm
 name: specialist
-version: 1.0.3
+version: 1.0.4
 cap_versions:
   - "1.0"
 profiles:
