@@ -99,7 +99,7 @@ def _cup_partner_candidates(found: list[str], service: str, local: set[str], lan
     ordered = dict.fromkeys([*known, *found])
     return [agent for agent in ordered if agent not in local and _CUP_TOKEN.fullmatch(agent)][:_CUP_MAX_PARTNERS]
 
-_CUP_PARTNER_REPLY_SECONDS = 8
+_CUP_PARTNER_REPLY_SECONDS = 20
 
 
 def role_of() -> str:
@@ -1136,10 +1136,9 @@ def _cup_relaxed(
     """Empty answer set: the nearest slots with one constraint relaxed (rules: offer a relaxed
     alternative, do not book outside S on our own). First the time window (same language and
     gender, any later day), then the language (an Italian-speaking doctor)."""
-    relaxed = fitting(lines, now=now, priority="P", lang=lang, gender=gender, procedure=procedure)
-    if not relaxed and lang not in {"it", ""}:
-        relaxed = fitting(lines, now=now, priority="P", lang="it", gender=gender, procedure=procedure)
-    return relaxed
+    # Only the time window is relaxed: a doctor who does not speak the citizen's language was
+    # declined every time (172), so the language is never given up.
+    return fitting(lines, now=now, priority="P", lang=lang, gender=gender, procedure=procedure)
 
 
 async def _cup_offer_batch(

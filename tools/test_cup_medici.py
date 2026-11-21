@@ -99,7 +99,7 @@ check("fitting B inglese: vuoto", cup.fitting(lines, now=NOW, priority="B", lang
 got = cup._cup_relaxed(lines, now=NOW, lang="en", gender=None, procedure="VIS-FIS")
 check("rilassata: prima la finestra (h1 inglese il lunedi' dopo)", [g["slot_id"] for g in got] == ["S-L"])
 got = cup._cup_relaxed(lines[1:], now=NOW, lang="en", gender=None, procedure="VIS-FIS")
-check("rilassata: poi la lingua (h2 italiano)", [g["slot_id"] for g in got] == ["S-2"])
+check("rilassata: mai un medico che non parla la lingua (172)", got == [])
 
 print("CUP - partner dell'anello (Discord) oltre a city.find")
 got = cup._cup_partner_candidates([], "hospital.physiatry", {"agent:noi"}, "ur")
