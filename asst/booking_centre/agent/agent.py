@@ -649,6 +649,7 @@ class _CupCase:
     offers: dict[str, dict[str, str]] = field(default_factory=dict)
     declined_slots: set[str] = field(default_factory=set)
     cross_consent_request: Message | None = None
+    cross_asst_declined: bool = False
     confirmation: Message | None = None
     cancellation: Message | None = None
     renewal_request: Message | None = None
@@ -671,6 +672,9 @@ def _cup_case(chat: list[Message], agent: str, citizen: str) -> _CupCase:
                     state.cross_consent_request = None
                 if not state.offers:
                     state.cancellation = row
+            elif state.cross_consent_request is not None and state.confirmation is None:
+                _, refused = _cup_cross_reply(row, state.cross_consent_request, act, fields)
+                state.cross_asst_declined |= refused
             continue
         if row.sender != agent:
             continue
@@ -692,6 +696,8 @@ def _cup_case(chat: list[Message], agent: str, citizen: str) -> _CupCase:
                 state.cross_consent_request = None
                 state.confirmation = None
                 state.cancellation = row
+                if fields.get("reason") == "consent_declined":
+                    state.cross_asst_declined = True
             elif act == "data.request" and fields.get("purpose") == "prescription_renewal":
                 if number := fields.get("prescription_number"):
                     state.expired_prescriptions.add(number)
@@ -871,6 +877,8 @@ async def _cup_confirm(
     if any(key in fields and fields[key] != value for key, value in expected.items()):
         return
     partner_id = offer.get("partner_offer_id")
+    if partner_id and state.cross_asst_declined:
+        return
     if partner_id and not cross_ref:
         await _cup_send(
             city, message, cache, citizen,
@@ -902,6 +910,29 @@ async def _cup_confirm(
         cache.uncertain_confirmation = False
 
 
+def _cup_cross_reply(
+    message: Message,
+    ask: Message,
+    act: str,
+    fields: dict[str, str],
+) -> tuple[str, bool]:
+    """Return the consent reference or whether the citizen declined this invitation."""
+    offer_id = fields_of(ask.text).get("offer_id", "")
+    if fields.get("offer_id", offer_id) != offer_id:
+        return "", False
+    if act in {"", "confirm", "need.request"} or (act == "cancel" and "offer_id" in fields):
+        return "", False  # Booking requests, confirmations and slot declines are separate from consent.
+    if fields.get("purpose") not in (None, "cross_asst"):
+        return "", False
+    received_at, asked_at = _when(message.sent_at), _when(ask.sent_at)
+    if received_at and asked_at and received_at < asked_at:
+        return "", False
+    reference = fields.get("consent_ref", "")
+    if act in {"consent", "data.response"} and fields.get("purpose") == "cross_asst" and _CUP_TOKEN.fullmatch(reference):
+        return reference, False
+    return "", act not in {"consent", "data.response"} or not reference
+
+
 async def _cup_cross_consent(
     city: City,
     message: Message,
@@ -915,22 +946,16 @@ async def _cup_cross_consent(
     ask = state.cross_consent_request
     assert ask is not None
     offer_id = fields_of(ask.text).get("offer_id", "")
-    if offer_id not in state.offers or fields.get("offer_id", offer_id) != offer_id:
+    if offer_id not in state.offers:
         return
-    if act in {"", "confirm"} or (act == "cancel" and "offer_id" in fields):
-        return  # Booking confirmations and slot declines are separate from consent.
-    if fields.get("purpose") not in (None, "cross_asst"):
-        return
-    received_at, asked_at = _when(message.sent_at), _when(ask.sent_at)
-    if received_at and asked_at and received_at < asked_at:
-        return
-    reference = fields.get("consent_ref", "")
-    if act in {"consent", "data.response"} and fields.get("purpose") == "cross_asst" and _CUP_TOKEN.fullmatch(reference):
+    reference, refused = _cup_cross_reply(message, ask, act, fields)
+    if reference:
         await _cup_confirm(city, message, chat, cache, state, citizen, {"offer_id": offer_id}, cross_ref=reference)
-    elif act not in {"consent", "data.response"} or not reference:
-        await _cup_send(
-            city, message, cache, citizen,
-            f"cancel offer_id={offer_id} reason=consent_declined Non ho condiviso i tuoi dati con l'altra ASST.",
+    elif refused:
+        await _cup_cancel(
+            city, message, chat, cache, citizen,
+            f"cancel offer_id={offer_id} reason=consent_declined I tuoi dati restano nella nostra ASST. "
+            "Cerco qui un altro orario.",
         )
 
 
@@ -1339,6 +1364,13 @@ async def _advance_alone(
             if slot.get("slot_id") not in taken and slot.get("facility", "").startswith("agent:")
             and slot["facility"] != agent and slot["facility"] not in unavailable
         ]
+        if case.cross_asst_declined:
+            if relaxed:
+                await _cup_offer_batch(
+                    city, message, sent, citizen, relaxed, number, priority, replacing=replacing,
+                    note="Questi orari della nostra ASST richiedono flessibilità sui giorni o sulla scadenza.",
+                )
+            return
         await _cup_cross_asst(
             city, message, chat, sent, citizen, procedure, priority, now, number, taken,
             replacing=replacing, relaxed=relaxed,
