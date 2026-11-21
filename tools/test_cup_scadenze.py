@@ -48,7 +48,8 @@ class AgendaDeadlineTests(unittest.IsolatedAsyncioTestCase):
             base.slot("too-late", "h1", "24T09:00", "tue"),
         ])
         offers = await box.offer("lang=en")
-        self.assertEqual(ids(offers), [("monday", None), ("tuesday", None)])
+        # Martedì e' oltre le 30 ore d'agenda (il weekend non conta), lunedi' no: martedi' prima.
+        self.assertEqual(ids(offers), [("tuesday", None), ("monday", None)])
 
     async def test_d_on_thursday_reaches_next_thursday(self):
         box = mailbox("thu-d", "D", THURSDAY, [

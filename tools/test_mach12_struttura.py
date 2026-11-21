@@ -222,11 +222,11 @@ def rslot(slot_id: str, doctor: str, when: str, day: str) -> str:
             f"agenda_day={day} agenda_date={when} urgent_reserve=false")
 
 
-R1 = rslot("R-1", DOC, "2026-11-24T09:30:00.000Z", "tue")    # quello prenotato e poi annullato
-R2 = rslot("R-2", DOC, "2026-11-24T13:30:00.000Z", "tue")    # stessa dottoressa
-R3 = rslot("R-3", DOC, "2026-11-25T09:30:00.000Z", "wed")    # stessa dottoressa
-R4 = rslot("R-4", DOC2, "2026-11-23T14:00:00.000Z", "mon")   # altra dottoressa, la piu' presto
-R5 = rslot("R-5", DOC2, "2026-11-26T09:00:00.000Z", "thu")   # altra dottoressa, fuori dal limite di 3
+R1 = rslot("R-1", DOC, "2026-11-25T09:30:00.000Z", "wed")    # quello prenotato e poi annullato
+R2 = rslot("R-2", DOC, "2026-11-25T13:30:00.000Z", "wed")    # stessa dottoressa
+R3 = rslot("R-3", DOC, "2026-11-26T09:30:00.000Z", "thu")    # stessa dottoressa
+R4 = rslot("R-4", DOC2, "2026-11-26T14:00:00.000Z", "thu")   # altra dottoressa, la piu' presto
+R5 = rslot("R-5", DOC2, "2026-11-27T09:00:00.000Z", "fri")   # altra dottoressa, fuori dal limite di 3
 REBOOK_ROWS = [R1, R2, R3, R4, R5]
 FAULT = "fault.cancel booking_id={b} reason=facility_cancelled"
 
@@ -478,6 +478,52 @@ async def riprova_hold_scaduto() -> None:
           len(h.out(tf.LEDGER, "hold")) == 1 and bool(h.out(cit, "cancel")), h)
 
 
+# --- Anticipo degli slot in ore d'agenda (un minuto reale = un'ora d'agenda) ---------------------------
+# Console 21/11 (8909110001400007): offerte per venerdi' 27 alle 10:30, `confirm` 20 minuti reali dopo =
+# 20 ore d'agenda: lo slot era passato, `cancel reason=EXPIRED` un secondo dopo, poi `reason=past`.
+# Il cittadino risponde dopo 3-27 ore d'agenda: si offrono per primi gli slot ad almeno 30 ore
+# d'agenda (il weekend non conta), poi quelli ad almeno 4 ore; sotto le 4 ore mai.
+
+
+class AgendaAt(tf.World):
+    def __init__(self, me, slots, now):
+        super().__init__(me, slots)
+        self.now = now
+
+    def answer(self, text):
+        if text.split()[0] == "agenda":
+            return f"agenda agenda_now={self.now}"
+        return super().answer(text)
+
+
+async def anticipo_degli_slot() -> None:
+    print("Anticipo degli slot in ore d'agenda")
+    cit = "citizen:t02/c-0700"
+
+    async def offered(now, rows):
+        h = tf.Harness(CAP, ME, AgendaAt(ME, {f"{PROC}:1": tf.slots_reply(ME, rows)}, now))
+        await h.turn(cit, "vorrei una visita ginecologica")
+        return [tokens(t).get("slot_id") for t in h.out(cit, "offer")], h
+
+    mon = "2026-11-23T08:00:00+01:00"  # lunedi' 08:00 d'agenda
+    rows = [slot("N-3h", "2026-11-23T10:00:00.000Z", "mon"),   # 11:00 locali: 3 ore, mai
+            slot("A-6h", "2026-11-23T13:00:00.000Z", "mon"),   # 14:00: 6 ore
+            slot("B-26h", "2026-11-24T09:30:00.000Z", "tue"),  # martedi' 10:30: 26 ore e mezza
+            slot("C-50h", "2026-11-25T09:30:00.000Z", "wed"),  # mercoledi' 10:30: 50 ore e mezza
+            slot("D-52h", "2026-11-25T11:00:00.000Z", "wed")]
+    got, h = await offered(mon, rows)
+    check("lunedi' 08:00: prima gli slot a 30 ore o piu' (C, D), poi A; B dopo; N-3h mai",
+          got == ["C-50h", "D-52h", "A-6h"], h)
+
+    fri = "2026-11-20T17:00:00+01:00"  # venerdi' 17:00: il weekend non esiste nell'agenda
+    rows = [slot("MON-17h", "2026-11-23T09:30:00.000Z", "mon"),  # lunedi' 10:30: 17 ore e mezza d'agenda
+            slot("TUE-41h", "2026-11-24T09:30:00.000Z", "tue"),  # 41 ore e mezza
+            slot("WED-65h", "2026-11-25T09:30:00.000Z", "wed")]
+    got, h = await offered(fri, rows)
+    check("venerdi' 17:00: lunedi' e' a 17 ore d'agenda, non 65: prima martedi' e mercoledi'",
+          got == ["TUE-41h", "WED-65h", "MON-17h"], h)
+
+
 async def run() -> None:
     await righe_vere()
     await criteri_estesi()
@@ -488,6 +534,7 @@ async def run() -> None:
         await riprenota_cup()
         await idempotenza()
         await riprova_hold_scaduto()
+        await anticipo_degli_slot()
         await codici_del_ledger()
         await regole_a_meta_partita()
     print(f"\n{'TUTTO OK' if not tf.FAILS else str(len(tf.FAILS)) + ' FALLITE'}")
