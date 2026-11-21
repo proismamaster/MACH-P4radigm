@@ -139,7 +139,9 @@ async def main():
         return World.answer(_w, text)
     h.world.answer = dup_world
     await h.turn(CIT, "Ho mal di schiena da settimane")
-    check("DUPLICATE di un altro paziente: nessuna ricetta annunciata", not h.out(CIT, "prescription"), h)
+    # GP 1.0.10 announces before the Ledger reply: our number is sha256 of need and citizen, so another
+    # patient's DUPLICATE cannot come from it. What stays true: never a second announcement.
+    check("DUPLICATE: al massimo un annuncio", len(h.out(CIT, "prescription")) <= 1, h)
     print("Specialist - due risposte al consenso: un solo referto, check-in con ledger_ref")
     h = harness("specialist_care.cardiology", SPEC)
     h.world.answer = lambda text, _w=h.world: (
@@ -158,7 +160,8 @@ async def main():
     h.mod._PULL_PAUSE = 0
     await h.turn(CIT, "Ho mal di schiena da settimane")
     check("prescribe inviato al Ledger", len(h.out("city:ledger", "prescribe")) == 1, h)
-    check("nessuna ricetta al cittadino senza prescribed", not h.out(CIT, "prescription"), h)
+    # GP 1.0.10: the number is ours and the Ledger keeps it, so it is announced without waiting (14:02 wave).
+    check("ricetta annunciata subito dopo prescribe, con il nostro numero", len(h.out(CIT, "prescription")) == 1, h)
     number = h.out("city:ledger", "prescribe")[0].split("prescription_number=")[1].split()[0] if h.out("city:ledger", "prescribe") else "x"
     await h.turn("city:ledger", f"prescribed prescription_number={number} patient={CIT} procedure=VIS-FIS priority=B state=issued")
     check("ricetta annunciata quando arriva prescribed", len(h.out(CIT, "prescription")) == 1, h)

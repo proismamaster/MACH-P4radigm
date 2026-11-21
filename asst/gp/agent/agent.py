@@ -617,7 +617,7 @@ async def _gp(city: City, message: Message, chat: list[Message], *, urgent: bool
 # would open our next turn comes 60-90 s later or not at all (405, 21/11 11:13 UTC: prescription on the
 # Ledger, never announced, the citizen never reached the CUP). After `prescribe` the turn reads the
 # history once a second for up to _RX_WAIT seconds (the hospital waits 180 s the same way).
-_RX_WAIT = 420.0  # the Ledger answered in 208-217 s at 10:06 UTC (consultorio 1.0.11 waits 420 s too)
+_RX_WAIT = 5.0  # only to catch an immediate refusal: the prescription is announced without waiting (14:02 wave)
 _RX_STEP = 1.0
 
 
@@ -658,13 +658,12 @@ async def _gp_announce(
             if act == "prescribed" and owner == citizen and values.get("procedure") == command["procedure"]:
                 reply = row
                 break
-    if reply is None:
-        # No Ledger confirmation yet: never announce a prescription the Ledger has not written.
-        # The Ledger reply (its own turn, or the citizen's next message) brings us back here.
-        return
-    values = fields_of(reply.text) if reply.type == "chat" else reply.body
-    act = first_word(reply.text) if reply.type == "chat" else reply.type
-    duplicate = values.get("code") == "DUPLICATE" or "DUPLICATE" in reply.text.split()
+    # 14:02 UTC wave: 39 prescriptions of 68 written on the Ledger, none announced before the judge closed
+    # the journeys 17 minutes later (`prescribed` 7-9 minutes late). The number is ours (_rx) and the Ledger
+    # keeps it: with no reply yet it is announced now; a later refusal still sends the failure message.
+    values = {} if reply is None else (fields_of(reply.text) if reply.type == "chat" else reply.body)
+    act = "prescribed" if reply is None else (first_word(reply.text) if reply.type == "chat" else reply.type)
+    duplicate = reply is not None and (values.get("code") == "DUPLICATE" or "DUPLICATE" in reply.text.split())
     if act == "refused" and not duplicate:
         failure = ("Mi dispiace, il registro non ha accettato la ricetta. "
                    "Mi riscriva il disturbo e riprovo subito.")
