@@ -18,12 +18,12 @@ Controllato con `city --json status` alle 11:45 UTC.
 | Agente | ID | Versione | Dalle (UTC) | Deployment | Rollback a |
 |---|---|---|---|---|---|
 | gp | `agent:rng5wcrzvhsj` | 1.0.7 | 11:35 | `dep-00f0f71e97ab4a988ef0e4bb1ea82243` | 1.0.6 |
-| booking_centre | `agent:ez8cb7j167p2` | 1.0.26 (secondo build, #118 + #119) | 11:18 | `dep-77ea4b5b7cd34d45b8281d7656f315fd` | 1.0.25 |
+| booking_centre | `agent:ez8cb7j167p2` | 1.0.27 (#118, senza #119) | 12:07 | `dep-dd35e91a32ac49fe948493ddac02d1f9` | 1.0.26 secondo build (con #119) o 1.0.25 |
 | hospital | `agent:bb01ggxymm05` | 1.0.7 | 10:47 | `dep-bbe98f223dff429490fb412e3eaa7e39` | 1.0.6 |
 | specialist | `agent:sh35cbsy287d` | 1.0.8 | 11:58 | `dep-0529d8ed84554da29972a22e62022443` | 1.0.7 |
 | family_counseling | `agent:nkh372rd16yq` | 1.0.14 | 11:45 | `dep-a3b16f15ea954d64814b20edde0e05f6` | 1.0.13 |
 
-Prossimi numeri (card su `main`): CUP 1.0.27, GP 1.0.8, ospedale 1.0.8, specialist 1.0.9, consultorio 1.0.15. Scale: CUP e GP un pod, concorrenza 32.
+Prossimi numeri (card su `main`): CUP 1.0.28, GP 1.0.8, ospedale 1.0.8, specialist 1.0.9, consultorio 1.0.15. Scale: CUP e GP un pod, concorrenza 32.
 
 ## Registro
 
@@ -66,4 +66,5 @@ Prossimi numeri (card su `main`): CUP 1.0.27, GP 1.0.8, ospedale 1.0.8, speciali
 | 21/11 11:45 | family_counseling | 1.0.14 | deploy (Ismail/Opus) | `dep-a3b16f15ea954d64814b20edde0e05f6` | `c65cccd` | stato letto dalla cronologia dopo un cambio di pod: rifiuti già gestiti, riprova unica, offerte dovute dopo un cancel (Hapca, #127; 9 controlli nuovi falliscono sulla 1.0.13). Conformance PASS. |
 | 21/11 11:58 | specialist | 1.0.8 | deploy (Ismail/Opus) | `dep-0529d8ed84554da29972a22e62022443` | `00cf662` | regola P2 in vigore (agenda 29/12 08:00): hold cross-ASST con `cross_asst_consent_ref`/`cross_consent_ref` quando il CUP li manda separati da `consent_ref` (#129). Conformance PASS. |
 | 21/11 11:58 | booking_centre, gp | — | `city scale --min 1 --max 1 --concurrency 32` (Ismail/Opus) | — | — | era 8 (05:48). Export 10:53-11:53 UTC: alle 11:31:38-51 circa 60 cittadini scrivono al CUP insieme, 37 non ricevono mai risposta (e 5 al GP). Un solo pod: con più repliche due pod gestirebbero lo stesso caso. |
+| 21/11 12:07 | booking_centre | 1.0.27 | deploy (Ismail/Opus) + `city scale --concurrency 32` | `dep-dd35e91a32ac49fe948493ddac02d1f9` | `7337b26` | **tolta la #119** (B a 20 ore): export 10:53-11:53 UTC, dopo le 11:18 i rifiuti per scadenza per offerta raddoppiano (0,45 -> 0,90) e le conferme nei falliti scendono da 16 a 1 (#131). Contiene #118. Scale riapplicato dopo il rilascio. Conformance PASS. |
 Commit: per le righe fino alle 07:29 è il commit del bump della card (il codice rilasciato è quello del suo genitore su `main`); dalle prossime, lo SHA di `main` rilasciato. Le righe con «—» sono ricostruite dai commit: chi ha fatto quei deploy può completare il deployment.
