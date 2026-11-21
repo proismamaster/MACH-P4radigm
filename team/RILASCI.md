@@ -13,13 +13,15 @@ Chi rilascia aggiunge la riga **subito dopo** `city deploy` / `city rollback`, n
 
 ## Online ora
 
+Controllato con `city --json status` alle 09:38 UTC.
+
 | Agente | ID | Versione | Dalle (UTC) | Deployment | Rollback a |
 |---|---|---|---|---|---|
 | gp | `agent:rng5wcrzvhsj` | 1.0.5 | 07:29 | — | 1.0.4 |
-| booking_centre | `agent:ez8cb7j167p2` | 1.0.23 | 04:32 | — | 1.0.22 |
+| booking_centre | `agent:ez8cb7j167p2` | 1.0.24 | 09:29 | `dep-3795422a70e544839eba398c31bd7b94` | 1.0.23 |
 | hospital | `agent:bb01ggxymm05` | 1.0.6 | 09:26 | `dep-23e98e1ab0cb4e15ab67505ee0c87a17` | 1.0.5 (o 1.0.4, prima di MACH-1.3) |
-| specialist | `agent:sh35cbsy287d` | 1.0.4 | 02:57 | `dep-3bdea6595d254e1ebd423ca375e38ac4` | 1.0.3 |
-| family_counseling | `agent:nkh372rd16yq` | 1.0.8 | 03:53 | `dep-095cc796b9394679951c8376d4f09d6b` | 1.0.7 |
+| specialist | `agent:sh35cbsy287d` | 1.0.5 | 09:33 | `dep-b977d25f34314a5fb64120260501ff21` | 1.0.4 |
+| family_counseling | `agent:nkh372rd16yq` | 1.0.9 | 09:34 | `dep-7199b7b16327402db6875f9ae058e455` | 1.0.8 |
 
 ## Registro
 
