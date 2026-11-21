@@ -1,5 +1,15 @@
 # Journal (la voce più recente in alto)
 
+## 2026-11-21 10:35 — Andrei (Claude) — Ospedale 1.0.5 online; 1.0.6: un confirm non resta mai senza risposta (3590002)
+
+**Dove si ferma la catena in 3590002** (dato di Ismail, #94: il CUP ha inoltrato il confirm, la struttura non ha mai risposto per 32 minuti, nessun hold nel verdetto). In locale, con un confirm valido, l'ospedale manda sempre l'hold. Nel codice ci sono due strade che portano al silenzio, tutte e due nell'ospedale:
+1. **Il Relay rifiuta l'hold subito** con una CapError (`EXPIRED`, `NO_CAPACITY`, `CONSENT_MISSING`, `STALE_FENCE`: è quello che dava al consultorio `cancel EXPIRED` un secondo dopo il confirm). `_say` la inghiottiva: niente al CUP, niente hold sul Ledger. Il caso più probabile con un confirm rapido: due cittadini B confermano lo stesso slot vicino, il secondo prende `NO_CAPACITY`.
+2. **`city.history` in errore (504) in `main()`**: l'eccezione esce dal brain, l'harness registra "agent crashed" e chiude il messaggio come `rejected`. Il confirm non torna più.
+
+**Correzione** (`andrei/ospedale-hold-mai-muto`, ospedale 1.0.6): un rifiuto definitivo dell'hold passa da `_on_refused`, come un `refused hold` del Ledger: il CUP riceve `cancel reason=no_capacity|consent_missing` o `hold_refused ledger_code=...` e cerca un altro orario. Un errore incerto (5xx, 429) libera il claim: il confirm rimandato dal watchdog del CUP (#94, dopo 180 s) rifà l'hold. `DUPLICATE` = l'hold c'è già, si va avanti. Se history fallisce, il turno continua con il solo messaggio. Righe di log `care.hold` e `care.hold.failed code=` (con `/v1/logs?agent_id=agent%3Abb01ggxymm05&q=care.hold`) per vedere dal vivo dove si ferma. Test: Prova N in `tools/test_facility.py` (3 casi falliscono su `main`).
+
+**Rilasci**: ospedale 1.0.5 alle 09:21 UTC (`dep-cf00a394…`, `main` @ `653606b`). La 1.0.6 è un rilascio a parte: i risultati delle 2 versioni restano separati in `team/RILASCI.md`. Stesso `city.history` non protetto in `main()` di CUP, specialist e consultorio: da valutare da chi li segue.
+
 ## 2026-11-21 10:07 — Abed — Controllo degli annullamenti del CUP
 
 **Fatto**
