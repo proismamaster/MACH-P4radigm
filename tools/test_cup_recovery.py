@@ -58,15 +58,15 @@ class Case:
         self.hidden_from_history = set()
         self.sent = []
 
-    def add(self, sender, text, recipient=CUP, *, conversation="citizen"):
+    def add(self, sender, text, recipient=CUP, *, conversation="citizen", message_type="chat", fields=None):
         message = Message(
-            type="chat",
+            type=message_type,
             sender=sender,
             recipient=recipient,
             msg_id=f"M-{self.need_id}-{next(self.ids)}",
             need_id=self.need_id,
             conversation_id=f"{self.need_id}:{conversation}",
-            body={"text": text},
+            body={"text": text} if fields is None else fields,
         )
         self.history_rows.append(message)
         return message
@@ -141,6 +141,14 @@ class Case:
         await self.turn(self.add(CITIZEN, f"confirm offer_id={offer_id} consent_ref=cons-42-booking"))
         return offer_id
 
+    async def book_local(self, *, booking_id="BK-1"):
+        offer_id = await self.accept_offer()
+        await self.turn(self.add(
+            HOSPITAL, f"booking.receipt booking_id={booking_id} ledger_ref=LR-{booking_id}", conversation="facility",
+        ))
+        assert understood(self.out(CITIZEN, "booking.receipt")[-1]).body["booking_id"] == booking_id
+        return offer_id
+
     async def receive_remote_offer(self, *, second_partner_slot=False, preferences="lang=it"):
         await self.open(local_free=0, preferences=preferences)
         (request,) = self.out(PARTNER, "need.request")
@@ -184,6 +192,76 @@ class CupRecoveryTests(unittest.IsolatedAsyncioTestCase):
         role = patch.dict(os.environ, {"CITY_ROLE": "booking_centre"})
         role.start()
         self.addCleanup(role.stop)
+
+    async def test_post_receipt_cancellation_ignores_unrelated_or_conflicting_events(self):
+        for index, (sender, template) in enumerate((
+            (PARTNER, "cancel booking_id=BK-1 slot_id=S-LOCAL"),
+            (PARTNER, "fault.cancel booking_id=BK-1 slot_id=S-LOCAL"),
+            (HOSPITAL, "cancel reason=facility_cancelled"),
+            (HOSPITAL, "cancel offer_id={offer_id} reason=facility_cancelled"),
+            (HOSPITAL, "cancel offer_id={offer_id} slot_id=S-LOCAL reason=expired"),
+            (HOSPITAL, "cancel booking_id=BK-1 slot_id=S-OTHER"),
+            (HOSPITAL, "cancel booking_id=BK-OTHER slot_id=S-LOCAL"),
+            (HOSPITAL, "cancel booking_id=BK-1 offer_id=of-other"),
+            (LEDGER, "fault.cancel booking_id=BK-OTHER slot_id=S-LOCAL"),
+        )):
+            with self.subTest(sender=sender, cancel=template):
+                case = Case(self.brain, f"booked-unrelated-cancel-{index}")
+                await case.open(local_free=1, second_local_slot=True)
+                offer_id = await case.book_local()
+                mark = len(case.sent)
+                await case.turn(case.add(sender, template.format(offer_id=offer_id), conversation="facility"))
+                self.assertEqual(case.sent[mark:], [], "An unrelated cancellation must leave the booking intact")
+
+    async def test_post_receipt_cancellation_accepts_facility_combined_rebook_message(self):
+        case = Case(self.brain, "booked-facility-rebook")
+        await case.open(local_free=1, second_local_slot=True)
+        offer_id = await case.book_local()
+        cancel = (
+            f"cancel reason=facility_cancelled booking_id=BK-1 offer_id={offer_id} slot_id=S-LOCAL\n"
+            f"offer offer_id=of-facility-new slot_id=S-LOCAL-LATER agenda_date={LATER_APPOINTMENT}"
+        )
+        await case.turn(case.add(HOSPITAL, cancel, conversation="facility"))
+
+        (notice,) = case.out(CITIZEN, "cancel")
+        self.assertEqual(understood(notice).body["booking_id"], "BK-1")
+        self.assertEqual([offer["slot_id"] for offer in case.choices()], ["S-LOCAL-LATER"])
+        await case.turn(case.add(HOSPITAL, cancel, conversation="facility"))
+        self.assertEqual(len(case.out(CITIZEN, "cancel")), 1, "Duplicate fault cannot reopen the booking twice")
+
+    async def test_post_receipt_cancellation_accepts_typed_city_fault_after_earlier_rebooking(self):
+        case = Case(self.brain, "booked-city-fault")
+        await case.open(local_free=1, second_local_slot=True)
+        await case.book_local()
+        await case.turn(case.add(HOSPITAL, "cancel booking_id=BK-1", conversation="facility"))
+        await case.book_local(booking_id="BK-2")
+        mark = len(case.sent)
+        await case.turn(case.add(HOSPITAL, "cancel booking_id=BK-1", conversation="facility"))
+        await case.turn(case.add(
+            LEDGER, "", conversation="ledger", message_type="fault.cancel",
+            fields={"booking_id": "BK-2", "slot_id": ["S-OTHER"]},
+        ))
+        self.assertEqual(case.sent[mark:], [], "A replay or malformed field cannot cancel the new booking")
+
+        await case.turn(case.add(
+            LEDGER, "", conversation="ledger", message_type="fault.cancel",
+            fields={"booking_id": "BK-2", "reason": "facility_cancelled"},
+        ))
+        self.assertEqual(
+            [understood(row).body.get("booking_id") for row in case.out(CITIZEN, "cancel")
+             if "booking_id=" in row.text],
+            ["BK-1", "BK-2"],
+        )
+
+    async def test_post_receipt_cancellation_accepts_city_fault_with_matching_slot(self):
+        case = Case(self.brain, "booked-city-slot-fault")
+        await case.open(local_free=1, second_local_slot=True)
+        await case.book_local()
+        await case.turn(case.add(LEDGER, "fault.cancel slot_id=S-LOCAL", conversation="ledger"))
+
+        (notice,) = case.out(CITIZEN, "cancel")
+        self.assertEqual(understood(notice).body["booking_id"], "BK-1")
+        self.assertEqual([offer["slot_id"] for offer in case.choices()], ["S-LOCAL-LATER"])
 
     async def test_p1_facility_cancellation_requires_new_verified_prescription(self):
         case = Case(self.brain, "facility-expiry")

@@ -1,5 +1,17 @@
 # Journal (la voce più recente in alto)
 
+## 2026-11-21 10:07 — Abed — Controllo degli annullamenti del CUP
+
+**Fatto**
+- Riprodotta la riapertura di una prenotazione dopo un annullamento estraneo o con riferimenti contraddittori. Il CUP ora verifica il mittente e abbina i riferimenti alla ricevuta attiva, anche dopo una prima riprenotazione.
+- Registrati in `PROBLEMS.md` i rifiuti per giorno, genere e scadenza prima della 1.0.24 e le cinque conferme senza ricevuta visibile, con la struttura scelta.
+
+**Problemi**
+- Al controllo in console risultava visibile CUP 1.0.23. Il confronto con la 1.0.24 richiede casi nati dopo il rilascio.
+
+**Prossimo passo**
+- Rivedere la PR e verificare un annullamento autentico in Arena. Sul campione dopo il rilascio confrontare i motivi di rifiuto e ogni conferma senza ricevuta.
+
 ## 2026-11-21 09:40 — Andrei (Claude) — 24 percorsi falliti della console: cause e correzioni
 
 **Fatto** (percorsi di Andrei dalla console, 21/11 01:36-04:19 UTC)
