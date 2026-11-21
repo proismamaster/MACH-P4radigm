@@ -732,6 +732,7 @@ def _cup_case(chat: list[Message], agent: str, citizen: str) -> _CupCase:
                 state.cross_consent_request = None
                 state.confirmation = None
                 state.cancellation = row
+                state.booked = False  # our cancel after a receipt (level 6): the case is open again
                 if fields.get("reason") == "consent_declined":
                     state.cross_asst_declined = True
             elif act == "data.request" and fields.get("purpose") == "prescription_renewal":
@@ -826,9 +827,29 @@ async def _booking_centre(city: City, message: Message, chat: list[Message]) -> 
         return
 
     state = _cup_case(chat, city.agent_id, citizen)
-    if state.booked:
-        return
     act, fields = _cup_input(message)
+    if state.booked:
+        # Level 6: a facility (or the city) cancels a booking we already confirmed to the citizen.
+        # Tell the citizen and search again inside the priority window, instead of staying silent.
+        if message.sender != citizen and ("cancel" in words(message.text) or "fault.cancel" in words(message.text)):
+            receipts = [row for row in chat if row.sender == city.agent_id and row.recipient == citizen
+                        and first_word(row.text) == "booking.receipt"]
+            booking_id = fields_of(receipts[-1].text).get("booking_id", "") if receipts else ""
+            confirmations = [row for row in chat if row.sender == city.agent_id and first_word(row.text) == "confirm"]
+            confirmed = fields_of(confirmations[-1].text) if confirmations else {}
+            ours = (
+                (booking_id and fields.get("booking_id") == booking_id)
+                or (confirmed.get("slot_id") and fields.get("slot_id") == confirmed.get("slot_id"))
+                or (confirmations and message.sender == confirmations[-1].recipient)
+            )
+            if ours and not _we(chat, city.agent_id, "reason=facility_cancelled", to=citizen, word="cancel"):
+                slot = confirmed.get("slot_id", "")
+                await _cup_cancel(
+                    city, message, chat, cache, citizen,
+                    f"cancel booking_id={booking_id} slot_id={slot} reason=facility_cancelled "
+                    "La struttura ha annullato la visita. Cerco subito un altro orario per lei.",
+                )
+        return
     pending = state.confirmation
     number = _cup_number(chat, citizen, state.expired_prescriptions)
     if pending is not None:
