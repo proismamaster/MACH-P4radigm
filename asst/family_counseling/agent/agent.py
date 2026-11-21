@@ -133,6 +133,11 @@ async def main(need: Need, city: City) -> None:
     text = message.text or need.summary
     if clinical(text):
         raise OutOfScope()
+    if not message.need_id:
+        # Every case message has a need_id. Without one, history() reads the whole mailbox (up to
+        # 5 signed pages of 200): the conformance probes have none, and that kept the turn open
+        # past the 5 s custody.ack waits for the lease renew (same fix as the hospital, PR #74).
+        return
     case = await city.history(need_id=message.need_id)
     await handle(role_of(), city, message, case)
 

@@ -500,15 +500,17 @@ async def prova_h() -> None:
                 await asyncio.sleep(3.0)  # come 5 pagine da 200 messaggi via Relay
             return await super().history(peer=peer, need_id=need_id)
 
+    consultorio = "family_counseling" in os.path.normpath(AGENT_FILE).split(os.sep)
+    cap, me = ("family_counseling.gynecology", FC) if consultorio else ("hospital.physiatry", HOSP)
     for label, body in (("prova della conformance (need.request lab/visit)", "need.request summary=visit"),
                         ("chat generica", "ciao")):
-        h = Harness("hospital.physiatry", HOSP, World(HOSP))
-        port = BigMailbox(HOSP)
+        h = Harness(cap, me, World(me))
+        port = BigMailbox(me)
         h.port = port
-        msg = Message(type="chat", sender="agent:t05/osp-x", recipient=HOSP, msg_id=uuid4().hex,
+        msg = Message(type="chat", sender="agent:t05/osp-x", recipient=me, msg_id=uuid4().hex,
                       need_id=None, conversation_id="c-1", body={"text": body})
         port.log.append(msg)
-        city = City(index=Index(), messages=port, history=port, agent_id=HOSP, inbound=msg)
+        city = City(index=Index(), messages=port, history=port, agent_id=me, inbound=msg)
         started = time.perf_counter()
         await h.mod.main(Need(summary=body, message=msg), city)
         elapsed = time.perf_counter() - started
@@ -516,6 +518,8 @@ async def prova_h() -> None:
               f"({elapsed:.2f} s, letture={port.whole_reads})",
               port.whole_reads == 0 and elapsed < 1 and not h.out(""), h)
 
+    if consultorio:
+        return  # con need_id il consultorio e' coperto dalla prova C
     # Un messaggio vero con need_id continua a funzionare (prova B lo copre per intero).
     h = Harness("hospital.physiatry", HOSP, World(HOSP))
     await h.turn(CUP_OWN, CONFIRM)
