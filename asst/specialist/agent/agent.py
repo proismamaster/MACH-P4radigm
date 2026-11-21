@@ -75,6 +75,7 @@ _LOG = logging.getLogger("care")
 # the case history and never opens a turn. Wait briefly and read it back from history.
 _PULL_TRIES = 24
 _PULL_PAUSE = 0.25
+# Patient wait of the confirm turn: _WAIT_SECONDS and _WAIT_STEP are set below, next to _await_line.
 # Needs whose sent offers this process remembers; the oldest is forgotten first.
 _SENT_NEEDS = 4096
 
