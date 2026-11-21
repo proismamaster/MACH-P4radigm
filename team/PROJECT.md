@@ -2,18 +2,18 @@
 
 > Milano Agentic City Hackathon, squadra p4radigm: 5 agenti di una ASST simulata. Gara dal 20/11 21:00 al 21/11 16:00.
 
-## Stato attuale (21/11 ore 08:30, freeze fino alle 10:00)
+## Stato attuale (21/11 ore 12:50 locali, 11:50 UTC) — punto comune della squadra
 
-- **Classifica: Boscovich 19° con 3467.** Il 9° (finale) è Ambrogio con 3789: mancano 322 punti. Dal 15° al 18° siamo a meno di 165. Dalle 10:00 alle 16:00 livello 8 con impostori e cambio di regola P1-P3.
-- **Aggiornamento 11:10 (locali):** i rilasci e le versioni online sono in `team/RILASCI.md` (le righe qui sotto sono delle 08:30). **Consultorio 1.0.10 online dalle 10:06 UTC** (attesa della risposta del Ledger, slot rifiutato mai riproposto, EXPIRED/STALE_FENCE con recupero); `team/PROBLEMS.md` ha i tempi per fase e `tools/misura_latenze.js` li rimisura dalla console.
-- **Online (tutti visibili):** CUP 1.0.23, **GP 1.0.5 dalle 08:29** (pubblicato da Alberto durante il freeze: il Ledger risponde in 7-9 minuti e il GP perdeva un giro per ogni ricetta, vedi `team/REVISIONE.md`), ospedale 1.0.4, specialist 1.0.4, consultorio 1.0.8.
-- **Su `main`, da pubblicare alle 10:00** (tutti i test verdi: 21 file, test_facility TUTTO OK per ospedale e consultorio):
-  - CUP 1.0.24 + **PR #86** (impostori: partner da `city.find` solo con ruolo della famiglia giusta e `no_clinical_advice`, reputazione più alta prima). La #86 è già aggiornata con `main`: si unisce senza conflitti.
-  - Ospedale 1.0.5 (finestra MACH-1.3), consultorio 1.0.9 (anticipo minimo 10 ore d'agenda, margine al confirm, agenda e pagina 1 condivise per ondata). Il CUP 1.0.24 contiene anche: letture del Ledger condivise per ondata, ricetta + agenda + pagina 1 nello stesso turno, al massimo 6 partner per ricerca. Specialist senza modifiche.
-  - **GP: niente deploy alle 10:00.** La 1.0.5 online è già il codice di `main`; la card è a 1.0.6 per il prossimo rilascio.
-- **Deploy alle 10:00:** uno al minuto (la città rifiuta con `QUOTA_EXCEEDED`), prima il CUP, poi ospedale e consultorio. Dopo ognuno `city --json status agent:<id>`. Per il CUP controllare nei log `cup.find ... kept=` diverso da 0. Rollback: CUP `--to 1.0.23`, GP `--to 1.0.4`, ospedale `--to 1.0.4`, consultorio `--to 1.0.8`.
-- **Perdita principale della notte:** confirm senza ricevuta (2 su 61) perché lo slot era già passato quando il cittadino decideva (3-27 ore d'agenda). Corretto con l'anticipo degli slot (ospedale 24 ore, CUP e consultorio 10-30 ore): da verificare in console sui primi percorsi dopo le 10:00 (`past`, `EXPIRED`, ricevute).
-- **Aperti:** follow-up dello specialist (serve un verdetto di cardiologia dalla console per sapere quando è richiesto); pitch e vision 2027 (Ettore, prima della finale: vale anche per la scelta dei mentor).
+- **Classifica:** 18° (livello 8, punteggi nascosti fino alla finale). Stop del codice alle 16:00.
+- **Online** (tutti `promoted PASS`, tabella con deployment e rollback in `team/RILASCI.md` → "Online ora"): CUP 1.0.26 (#118 + #119), GP 1.0.7, ospedale 1.0.7, specialist 1.0.7, consultorio 1.0.14. Ogni card su `main` è un numero avanti (CUP 1.0.27, GP 1.0.8, ospedale 1.0.8, specialist 1.0.8, consultorio 1.0.15).
+- **`main` verificato alle 11:45 UTC:** 31 file di test su 31 verdi, i cinque agenti compilano, cinque card valide.
+- **Dove si perdono i punti (misure dalla console):** GP +2 a quasi ogni percorso; il CUP prende -1 (`no_booking`) quando la prenotazione non arriva in fondo e le strutture fanno 0. Cause misurate: il cittadino conferma 19 ore d'agenda dopo l'offerta (mediana, 3-35), quindi gli slot vicini sono già passati; rifiuti per scadenza, genere e giorno; Ledger lento (5-9 minuti per risposta, hold di circa 2 minuti).
+- **Correzioni online di oggi:** CUP con 5 offerte varie, controllo dei tempi della conferma, slot B ad almeno 20 ore dentro la scadenza vera, partner verificati; GP che aspetta `prescribed` fino a 90 s; specialist con referto senza consenso, rifiuti tardivi e commit tardivi; ospedale e consultorio con attesa paziente del Ledger e stato letto dalla cronologia dopo un rilascio.
+- **Aperti:**
+  - consultorio: `_MIN_LEAD` 10 ore, troppo vicino (5 cancel `past` su 6 conferme alle 10-11 UTC) — Hapca;
+  - partner: rispondono quasi sempre `no_availability` mentre i verdetti contano 130-650 posti validi (ipotesi: `earliest`/`deadline` MACH-1.4 letti in un'altra base oraria) — da verificare dal vivo;
+  - impostori: il filtro è nella #118 (online).
+- **Regola dei rilasci (dopo il doppio build CUP 1.0.26 delle 11:16-11:18):** prima di `city deploy` si scrive nel gruppo "rilascio <agente> <versione>", si fa `git pull`, si controllano `/v1/team/deployments` e l'ultima riga di `team/RILASCI.md`; nessun altro rilascia finché non c'è la riga nuova. Un agente alla volta, almeno 90 s tra due deploy.
 
 ## Dove trovare cosa
 
