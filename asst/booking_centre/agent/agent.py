@@ -1463,13 +1463,16 @@ async def _cup_cross_asst(
         row.sender == agent and row.recipient == citizen and row.text.endswith(retry_notice)
         for row in after_notice or []
     )
-    # The citizen can repeat the request after we offered to check again. The saved no-slots
-    # message separates the two search rounds even after a restart; replies keep their own IDs.
-    inbound = city.inbound
+    # Rare-language requests can depend on one partner: retry once when the citizen returns
+    # after the no-slots notice. The notice separates rounds, and offers keep their request IDs.
+    inbound = getattr(city, "inbound", None)
+    retry_fields = _cup_input(inbound)[1] if inbound is not None and inbound.sender == citizen else {}
+    retry_language = retry_fields.get("lang", "").lower()
     retry_here = (
-        not rechecked and after_notice is not None and inbound is not None and inbound.sender == citizen
+        not rechecked and after_notice is not None and inbound is not None
+        and retry_language not in {"", "it", "en"} and _CUP_TOKEN.fullmatch(retry_language)
         and (inbound.type == "need.request" or "need.request" in words(inbound.text))
-        and _cup_input(inbound)[1].get("prescription_number") == number
+        and retry_fields.get("prescription_number") == number
         and any(row.msg_id == inbound.msg_id for row in after_notice)
     )
     if retry_here:
