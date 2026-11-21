@@ -715,7 +715,7 @@ async def _confirm_once(
         cross = fields.get("cross_consent_ref") or fields.get("cross_asst_consent_ref", "")
         if cross:
             hold_consent = cross
-        elif _rule_on(chat, "P2"):
+        elif _rule_on(await _fresh_rules(city, message, chat), "P2"):
             if not _we(chat, agent, f"slot_id={slot}", to=message.sender, word="cancel"):
                 parts = ["cancel"]
                 if offer_id:
@@ -988,6 +988,32 @@ def _refusal_reason(text: str) -> str:
     return match.group(0) if match else "facility_cancelled"
 
 
+# Level 8: the Ledger's own refusal, as the booking centre reads it. These three are a cancel with
+# the code in lower case; any other Ledger code is a hold_refused that names it.
+_CANCEL_CODES = {"prescription_expired", "consent_missing", "no_capacity"}
+
+
+def _refusal_line(reason: str, offer_id: str, slot: str, to_centre: bool) -> str:
+    ids = f"offer_id={offer_id} slot_id={slot}"
+    if not to_centre or reason == "facility_cancelled":
+        return f"cancel {ids} reason={reason}"
+    if reason.lower() in _CANCEL_CODES:
+        return f"cancel {ids} reason={reason.lower()}"
+    return f"hold_refused {ids} ledger_code={reason}"
+
+
+async def _fresh_rules(city: City, message: Message, chat: list[Message]) -> list[Message]:
+    """Ask the Ledger for ``rules`` now (they change mid-game) and wait for the new reply."""
+
+    def count(rows: list[Message]) -> int:
+        return sum(1 for row in rows if row.sender == LEDGER and first_word(row.text) == "rules")
+
+    known = count(chat)
+    if not await _say(city, LEDGER, "rules"):
+        return chat
+    return await _until(city, message.need_id, chat, lambda rows: count(rows) > known)
+
+
 async def _on_refused(
     city: City, message: Message, chat: list[Message], *, hold_self: bool
 ) -> None:
@@ -1008,13 +1034,13 @@ async def _on_refused(
         for row in chat:
             if f"slot_id={slot}" in row.text.split():
                 offer_id = fields_of(row.text).get("offer_id", offer_id)
+    line = _refusal_line(_refusal_reason(message.text), offer_id, slot, target.startswith("agent:"))
     if (
         target
         and offer_id
-        and not _we(chat, agent, f"offer_id={offer_id}", to=target, word="cancel")
+        and not _we(chat, agent, f"offer_id={offer_id}", to=target, word=line.split()[0])
     ):
-        reason = _refusal_reason(message.text)
-        await _say(city, target, f"cancel offer_id={offer_id} slot_id={slot} reason={reason}")
+        await _say(city, target, line)
     # The consultorio offers its next free slots again, but only to its own citizen: a confirm
     # that came from another booking centre goes back to that centre with the cancel above.
     if hold_self and target.startswith("citizen:"):
