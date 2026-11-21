@@ -60,6 +60,7 @@ _RED_FLAGS = (
 _DEADLINE_DAYS = {"B": 2, "D": 5}
 _RX = re.compile(r"^prescription_number-[A-Z0-9-]{4,40}$")
 _LOG = logging.getLogger("care")
+_LOGGED_REPLIES: set[str] = set()
 # The Relay accepts a ledger reply and then the agent rejects the push, so the reply sits in
 # the case history and never opens a turn. Wait briefly and read it back from history.
 _PULL_TRIES = 24
@@ -1023,6 +1024,11 @@ def _cup_partner_slots(
         request_id = searches.get(row.sender)
         if not request_id:
             continue
+        if row.msg_id not in _LOGGED_REPLIES:
+            # Diagnostics: the console shows only citizen messages, so partner replies are
+            # visible only here (GET /v1/logs?agent_id=...&q=<need_id>).
+            _LOGGED_REPLIES.add(row.msg_id)
+            _LOG.warning("cup.partner_reply need=%s from=%s text=%s", row.need_id, row.sender, row.text[:600])
         act, fields = _cup_input(row)
         if act == "cancel":
             if fields.get("request_id", request_id) != request_id:
@@ -1135,6 +1141,10 @@ async def _cup_cross_asst(
             lambda rows: not (searches.keys() - collect(rows)[1]), max_polls=6,
         )
         offers, answered = collect(fresh)
+    _LOG.warning(
+        "cup.partners need=%s asked=%d answered=%d usable_offers=%d now=%s priority=%s",
+        message.need_id, len(searches), len(answered), len(offers), now.isoformat(), priority,
+    )
     if offers:
         await _cup_offer_batch(city, message, cache, citizen, offers, number, priority, replacing=replacing)
         return
