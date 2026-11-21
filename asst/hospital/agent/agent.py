@@ -441,7 +441,8 @@ def fitting(
             continue
         if facility and slot.get("facility") != facility:
             continue
-        free = slot.get("free")
+        # The live world says capacity= (/v1/team/world); older pages and the tests say free=.
+        free = slot.get("free", slot.get("capacity"))
         if free is not None and free.isdigit() and int(free) <= 0:
             continue
         reserve = slot.get("urgent_reserve", "").lower() == "true"
@@ -704,6 +705,8 @@ def _remember_reads(chat: list[Message]) -> None:
         head = first_word(row.text)
         if head == "agenda" and "agenda_now=" in row.text:
             key = "agenda"
+        elif head == "rules":
+            key = "rules"  # the rules are the wave's, the same for every case
         elif head == "slots" and _page(row.text)[0] == 1:
             procs = {fields_of(line).get("procedure") for line in row.text.splitlines() if "slot_id=" in line} - {None}
             if len(procs) != 1:
@@ -1350,9 +1353,13 @@ async def _fresh_rules(city: City, message: Message, chat: list[Message]) -> lis
         return sum(1 for row in rows if row.sender == LEDGER and first_word(row.text) == "rules")
 
     known = count(chat)
+    remembered = _LEDGER_READS.get("rules")  # the wave's rules, read in any case: a fallback, never the answer
     if not await _say(city, LEDGER, "rules"):
-        return chat
-    return await _until(city, message.need_id, chat, lambda rows: count(rows) > known)
+        return [remembered[0], *chat] if remembered is not None else chat
+    fresh = await _until(city, message.need_id, chat, lambda rows: count(rows) > known)
+    if count(fresh) <= known and remembered is not None:
+        return [remembered[0], *fresh]  # no answer in the short wait: the rules read in another case
+    return fresh
 
 
 async def _on_refused(
@@ -1425,7 +1432,22 @@ async def _on_checkin(city: City, message: Message, chat: list[Message], *, repo
         return
     token = f"booking_id={booking_id}"
     if not _we(chat, city.agent_id, token, to=LEDGER, word="checkin"):
-        if not await _say(city, LEDGER, f"checkin booking_id={booking_id} citizen={citizen}"):
+        sent = False
+        for attempt in range(2):  # a 5xx under load: one more try (the window is 5 real minutes)
+            try:
+                await city.say(LEDGER, f"checkin booking_id={booking_id} citizen={citizen}")
+                sent = True
+                break
+            except CapError as error:
+                _LOG.warning("care.checkin.failed need=%s code=%s", (message.need_id or "")[:48], error.code)
+                try:
+                    retry = 500 <= error.http_status() < 600
+                except CapError:
+                    retry = False
+                if not retry or attempt:
+                    break
+                await asyncio.sleep(_PULL_PAUSE)
+        if not sent:
             return
     # Patient: the check-in window is half an agenda day (5 real minutes) and the push of checked_in comes
     # 60-90 s after the Ledger's reply is already in the case history.
@@ -1713,7 +1735,8 @@ def _facility_slots(
             continue
         if slot.get("facility") and not _same_agent(slot["facility"], me):
             continue
-        free = slot.get("free")
+        # The live world says capacity= (/v1/team/world); older pages and the tests say free=.
+        free = slot.get("free", slot.get("capacity"))
         if free is not None and free.isdigit() and int(free) <= 0:
             continue
         if earliest is not None and not earliest < at:
@@ -1773,6 +1796,36 @@ def _partner_offer(slot: dict[str, str], me: str, priority: str | None, request_
     if priority:
         parts.append(f"priority={priority}")
     return " ".join(part for part in parts if not part.endswith("="))
+
+
+# Up to five offers to a booking centre, the first as ranked and then the ones that add a doctor gender or a
+# weekday: the citizen of the other ASST has hidden gender and day preferences and answers once (our CUP
+# saw all three offers refused for gender or day in 56 of 90 journeys). A message holds at most 2000 chars.
+_PARTNER_OFFERS = 5
+_MAX_TEXT = 2000
+
+
+def _varied(slots: list[dict[str, str]], count: int) -> list[dict[str, str]]:
+    if len(slots) <= count:
+        return list(slots)
+    picked, rest = [slots[0]], list(slots[1:])
+
+    def gender(slot: dict[str, str]) -> str:
+        known = _our_doctor(slot.get("doctor_id", ""))
+        return known[1] if known else ""
+
+    while len(picked) < count and rest:
+        genders = {gender(slot) for slot in picked}
+        days = {slot.get("day") or slot.get("agenda_day") for slot in picked}
+
+        def gain(index: int) -> tuple[int, int]:
+            slot = rest[index]
+            new_gender = bool(gender(slot)) and gender(slot) not in genders
+            new_day = (slot.get("day") or slot.get("agenda_day")) not in days
+            return (3 * new_gender + 2 * new_day, -index)
+
+        picked.append(rest.pop(max(range(len(rest)), key=gain)))
+    return picked
 
 
 def _stamp(value: str) -> datetime | None:
@@ -1859,7 +1912,11 @@ async def _answer_search(
         or ((earliest is None or at >= earliest) and (deadline is None or at <= deadline))
     ]
     if slots:
-        offers = [_partner_offer(slot, agent, priority, rid) for slot in slots[:3]]
+        offers: list[str] = []
+        for slot in _varied(slots, _PARTNER_OFFERS):
+            line = _partner_offer(slot, agent, priority, rid)
+            if len("\n".join([*offers, line])) <= _MAX_TEXT:
+                offers.append(line)
         await reply("\n".join(offers))
         return
     page, pages = _page(world)
