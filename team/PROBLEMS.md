@@ -1,6 +1,11 @@
 
 # Problemi
 
+## CUP 1.0.27 e ricevuta già in cronologia
+
+- Su `5976e31`, se una ricevuta della struttura è leggibile nella cronologia prima che arrivi come messaggio, una nuova conferma del cittadino può attivare il reinvio. Alla richiesta successiva il CUP può avviare la sostituzione della visita già prenotata.
+- Riprodotto con il City SDK. Verificare in Arena per lo stesso `need_id` l'ordine fra ricevuta della struttura, reinvio del CUP e ricevuta al cittadino. La prova distingue ricevute attribuibili all'offerta in corso da risposte vecchie o di altre strutture.
+
 ## Consultorio 1.0.13 e il cambio di pod (21/11, messaggi fino alle 11:23 UTC)
 
 - **Un terzo hold dopo il cancel.** `N-2026-11-02-8909110003810002` (orari `sent_at`, UTC):

@@ -1,5 +1,11 @@
 # Journal (la voce più recente in alto)
 
+## 2026-11-21 13:51 — Abed — Recupero della ricevuta CUP dalla cronologia
+
+- **Fatto.** Riprodotto con il City SDK un caso in cui la ricevuta della struttura era già in cronologia mentre il CUP ritentava la conferma. Il recupero verifica struttura, pratica e offerta. Se la stessa prenotazione risulta poi annullata dalla fonte attesa, il CUP propone un'alternativa.
+- **Problemi.** La prova è locale. La frequenza in Arena resta da misurare e il timer del reinvio resta in memoria.
+- **Prossimo passo.** Review della PR e controllo in Arena della prima conferma con ricevuta tardiva dopo il rilascio.
+
 ## 2026-11-21 12:40 — Alberto (Hhapca, con Claude) — Consultorio 1.0.13 online; il cambio di pod lasciava un terzo hold, correzione pronta
 
 **Fatto**
