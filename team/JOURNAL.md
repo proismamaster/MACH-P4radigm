@@ -1,5 +1,15 @@
 # Journal (la voce più recente in alto)
 
+## 2026-11-21 03:40 — Andrei (Claude) — CUP: livello 8 verificato, messaggi al cittadino con il passo successivo
+
+**Fatto**
+- Livello 8 (regole P1-P3): il CUP non legge `rules`, ma P2 chiede sempre il consenso `cross_asst`, P3 esclude sempre `urgent_reserve` per B/D/P, P1 si basa su `prescription ... state=expired` del Ledger e su `PRESCRIPTION_EXPIRED` (rinnovo). Contesa del livello 7: dopo un cancel della struttura il CUP riprenota (`_cup_cancel` -> `_advance_alone`). Nessuna modifica: già coperto dai test di Abed.
+- Review di proattività (-1 per messaggi "freddi"): 4 messaggi al cittadino erano solo token. Ora hanno una frase con il passo successivo: ricevuta (conservare booking_id/ledger_ref per il check-in), rifiuto della struttura (cerco un altro orario), lista d'attesa (cosa succede), offerte (rispondere con l'orario o chiedere altre date); `no_slots` dice cosa indicare. Tutto al "lei". Token invariati.
+- Test: `tools/test_cup_cortesia.py` (nuovo, 4 controlli falliscono su main). Verdi anche cortesia, scadenze, l5_vincoli, medici, recovery, test_fix.
+
+**Prossimo passo**
+- Deploy CUP, poi console: review di proattività del CUP sui nuovi percorsi.
+
 ## 2026-11-21 03:25 — Andrei (Claude) — Scadenze in giorni di agenda (CUP e ospedale)
 
 **Fatto**

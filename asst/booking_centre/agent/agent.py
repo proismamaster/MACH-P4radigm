@@ -887,7 +887,11 @@ async def _booking_centre(city: City, message: Message, chat: list[Message]) -> 
                 return
             booking_id, ledger_ref = fields.get("booking_id"), fields.get("ledger_ref")
             if booking_id and ledger_ref:
-                receipt = f"booking.receipt booking_id={booking_id} ledger_ref={ledger_ref}"
+                receipt = (
+                    f"booking.receipt booking_id={booking_id} ledger_ref={ledger_ref} "
+                    "Prenotazione confermata. Conservi booking_id e ledger_ref: le serviranno per il "
+                    "check-in in struttura il giorno della visita."
+                )
                 await _cup_send(city, message, cache, citizen, receipt)
         elif act in {"cancel", "hold_refused"} and fields.get("offer_id") == choice.get("offer_id"):
             # MACH-1.2: a partner reports Ledger refusals as cancel reason=<code in lower case>
@@ -899,7 +903,9 @@ async def _booking_centre(city: City, message: Message, chat: list[Message]) -> 
             else:
                 await _cup_cancel(
                     city, message, chat, cache, citizen,
-                    f"cancel offer_id={citizen_offer} reason=facility_cancelled",
+                    f"cancel offer_id={citizen_offer} reason=facility_cancelled "
+                    "La struttura non ha potuto confermare questo orario. Cerco subito un'altra "
+                    "disponibilità per lei.",
                 )
         return
 
@@ -1268,7 +1274,8 @@ async def _cup_cross_asst(
     if not _we(chat, city.agent_id, f"reason={reason}", to=citizen, word="cancel"):
         await _cup_send(
             city, message, cache, citizen,
-            f"cancel reason={reason} Non ho trovato orari confermabili. Possiamo cercare altri giorni se per te va bene.",
+            f"cancel reason={reason} Non ho trovato orari confermabili entro i tempi della sua priorità. "
+            "Se può indicarmi altri giorni o orari che le vanno bene, riprovo subito.",
         )
 
 
@@ -1289,7 +1296,11 @@ async def _cup_offer_batch(
     note: str | None = None,
 ) -> None:
     batch = token_hex(6)
-    instruction = f"{note} Scegli uno degli orari, se le va bene." if note else "Scegli uno degli orari."
+    instruction = (
+        "Mi risponda con l'orario che preferisce; se nessuno le va bene, me lo dica e cerco altre date."
+    )
+    if note:
+        instruction = f"{note} {instruction}"
     options = []
     delivered = set()
     for index, slot in enumerate(slots[:3], 1):
@@ -1356,7 +1367,11 @@ async def _advance_alone(
             if offer_id in sent.offers:
                 return
             if not _we(chat, agent, token, to=citizen, word="offer"):
-                if await _cup_send(city, message, sent, citizen, f"offer offer_id={offer_id} waiting_list=true"):
+                waiting = (
+                    f"offer offer_id={offer_id} waiting_list=true Per la sua priorità non serve un orario "
+                    "fisso: la inserisco in lista d'attesa e la ricontattiamo appena si libera un posto."
+                )
+                if await _cup_send(city, message, sent, citizen, waiting):
                     sent.offers.add(offer_id)
             return
         procedure = None if reply is None else reply.get("procedure")
