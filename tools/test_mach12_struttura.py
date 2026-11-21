@@ -423,6 +423,61 @@ async def regole_a_meta_partita() -> None:
               ("slot_id=R-U" in text) == expected, h)
 
 
+# --- Hold scaduto o fence vecchio: una sola nuova prenotazione prima di annullare --------------------
+# Console 21/11 (percorsi 256, 229, 216, 248): dopo il confirm il Ledger rifiutava il commit con
+# EXPIRED o STALE_FENCE e il consultorio annullava subito al cittadino, che restava senza
+# prenotazione. Una sola riprova (nuovo hold + nuovo commit) per slot; poi il cancel.
+
+
+class Expiring(tf.World):
+    """I primi `times` commit trovano l'hold scaduto o con fence vecchio (codice `code`)."""
+
+    def __init__(self, me, slots, code="EXPIRED", times=1):
+        super().__init__(me, slots)
+        self.code, self.left = code, times
+
+    def answer(self, text):
+        if text.split()[0] == "commit" and self.left > 0:
+            self.left -= 1
+            hold = dict(w.split("=", 1) for w in text.split()[1:] if "=" in w)["hold_id"]
+            return f"refused commit hold_id={hold} code={self.code}"
+        return super().answer(text)
+
+
+async def riprova_hold_scaduto() -> None:
+    print("Hold scaduto o fence vecchio: una sola riprova")
+    cit = "citizen:t02/c-0400"
+    confirm = "confirm offer_id=of-R-1 consent_ref=cons-N-booking"
+    for code in ("EXPIRED", "STALE_FENCE"):
+        h = tf.Harness(CAP, ME, Expiring(ME, {f"{PROC}:1": tf.slots_reply(ME, REBOOK_ROWS)}, code))
+        await h.turn(cit, "vorrei una visita ginecologica")
+        await h.turn(cit, confirm)
+        receipts = h.out(cit, "booking.receipt")
+        check(f"cittadino, commit rifiutato {code} una volta: due hold e due commit su R-1",
+              len(h.out(tf.LEDGER, "hold")) == 2 and len(h.out(tf.LEDGER, "commit")) == 2
+              and all("slot_id=R-1" in t for t in h.out(tf.LEDGER, "hold")), h)
+        check(f"cittadino, {code}: una ricevuta su R-1 e nessun cancel", len(receipts) == 1
+              and "slot_id=R-1" in receipts[0] and not h.out(cit, "cancel"), h)
+    h = tf.Harness(CAP, ME, Expiring(ME, {f"{PROC}:1": tf.slots_reply(ME, REBOOK_ROWS)}, "STALE_FENCE"))
+    await h.turn(CUP, search("rq-X1", ""))
+    await h.turn(CUP, "confirm offer_id=of-R-1 slot_id=R-1 citizen=citizen:t01/c-9 "
+                      "consent_ref=cons-1 request_id=rq-X1")
+    receipts = h.out(CUP, "booking.receipt")
+    check("CUP, STALE_FENCE una volta: due hold e una ricevuta al CUP, nessun cancel",
+          len(h.out(tf.LEDGER, "hold")) == 2 and len(receipts) == 1 and not h.out(CUP, "cancel"), h)
+    h = tf.Harness(CAP, ME, Expiring(ME, {f"{PROC}:1": tf.slots_reply(ME, REBOOK_ROWS)}, "EXPIRED", 99))
+    await h.turn(cit, "vorrei una visita ginecologica")
+    await h.turn(cit, confirm)
+    cancels = h.out(cit, "cancel")
+    check("sempre EXPIRED: una sola riprova (due hold, non di piu') e un solo cancel al cittadino",
+          len(h.out(tf.LEDGER, "hold")) == 2 and len(cancels) == 1 and "reason=EXPIRED" in cancels[0], h)
+    h = tf.Harness(CAP, ME, Expiring(ME, {f"{PROC}:1": tf.slots_reply(ME, REBOOK_ROWS)}, "NO_CAPACITY", 99))
+    await h.turn(cit, "vorrei una visita ginecologica")
+    await h.turn(cit, confirm)
+    check("NO_CAPACITY non si riprova: un solo hold e il cancel",
+          len(h.out(tf.LEDGER, "hold")) == 1 and bool(h.out(cit, "cancel")), h)
+
+
 async def run() -> None:
     await righe_vere()
     await criteri_estesi()
@@ -432,6 +487,7 @@ async def run() -> None:
         await riprenota_cittadino()
         await riprenota_cup()
         await idempotenza()
+        await riprova_hold_scaduto()
         await codici_del_ledger()
         await regole_a_meta_partita()
     print(f"\n{'TUTTO OK' if not tf.FAILS else str(len(tf.FAILS)) + ' FALLITE'}")

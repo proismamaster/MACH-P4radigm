@@ -16,6 +16,7 @@ from collections import OrderedDict
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from time import monotonic
 
 from city_sdk.city import LEDGER, CapError, City, Message, Need, OutOfScope, clinical, understood
 
@@ -75,13 +76,83 @@ def role_of() -> str:
     return _card_role(text)
 
 
+# Trust ring, safe mode (level 8, impostors from Saturday 10:00). The Index may not return the
+# booking centres to a facility, so a stranger is NOT refused for being unknown: a sender is
+# blocked (no reply, no Ledger call) only when it is in neither the ring list nor city.find AND
+# it sends a facility= naming another agent or a text with instructions. Before 10:00 nothing is
+# blocked and the log says who would have been. The list holds the ids published so far.
+_RING = frozenset((
+    "agent:h6r1v45esk77", "agent:hnpe58epeyh1", "agent:gpr1zqe343gb", "agent:zand0f57ec1j",
+    "agent:nanpr5mgm2py", "agent:pky3vqyqbepa", "agent:xtj1dk9x3qej", "agent:q18es2d82f8r",
+    "agent:x0vr9rbwpesr", "agent:h8425ac7btd8", "agent:tmt0bcv0st1f", "agent:n9bf9y6670hp",
+    "agent:s1twcdzg3296", "agent:f2s88vwd3jnf", "agent:gxq3vzgt3h5t", "agent:tty8erdj6t41",
+    "agent:etpwrfmfa8hm", "agent:tnzkhsa62kn0",
+))
+_KNOWN: dict[str, float] = {}  # booking centre -> when city.find last confirmed it
+_KNOWN_FOR = 300.0
+_FIND_EVERY = 5.0  # an unknown sender cannot make us query the Index more often than this
+_found_at = [-_FIND_EVERY]
+
+
+async def _in_ring(city: City, sender: str) -> bool:
+    if sender in _RING or _KNOWN.get(sender, 0.0) > monotonic():
+        return True
+    if monotonic() - _found_at[0] < _FIND_EVERY:
+        return False
+    _found_at[0] = monotonic()
+    try:
+        peers = await city.find("booking_centre")
+    except CapError:
+        return False
+    for peer in peers:
+        if peer.role == "booking_centre" or any(c.split(".")[0] == "booking_centre" for c in peer.capabilities):
+            _KNOWN[peer.agent_id] = monotonic() + _KNOWN_FOR
+    return _KNOWN.get(sender, 0.0) > monotonic()
+
+
+# Real clock, Milan time (CET, UTC+1): the impostors arrive on Saturday 21/11 at 10:00.
+_ENFORCE_FROM = datetime(2026, 11, 21, 10, 0, tzinfo=timezone(timedelta(hours=1)))
+_INJECTION = re.compile(
+    r"ignor\w*\s+(\w+\s+){0,3}(regole|istruzioni|rules|instructions|prompt)"
+    r"|(disregard|forget|dimentica\w*)\s+(\w+\s+){0,3}(rules|instructions|regole|istruzioni)"
+    r"|\b(sei ora|you are now|act as|fingi di)\b|system prompt"
+    r"|(mandami|inviami|dammi|mostrami|send me|give me|reveal)\s+(\w+\s+){0,3}(dati|data|nome|name)"
+    r"|senza (il )?consenso|without (the )?consent|salta\w* i controlli|bypass",
+    re.IGNORECASE,
+)
+
+
+async def _admitted(city: City, message: Message) -> bool:
+    sender = message.sender
+    if sender == LEDGER or sender == city.agent_id or sender.startswith(("citizen:", "city:")):
+        return True
+    # facility= names the sender (its own offer) or us (the booking centre's confirm); another
+    # agent is a forged claim.
+    facility = _search_fields(message).get("facility", "")
+    forged = bool(facility) and facility not in (sender, city.agent_id)
+    injected = bool(_INJECTION.search(message.text))
+    if not (forged or injected) or await _in_ring(city, sender):
+        return True
+    enforced = datetime.now(timezone.utc) >= _ENFORCE_FROM
+    _LOG.warning(
+        "care.ring.suspect",
+        extra={"sender": sender, "facility": facility, "injection": injected, "blocked": enforced},
+    )
+    return not enforced
+
+
 async def main(need: Need, city: City) -> None:
     message = city.inbound
-    if message is None:
+    if message is None or not await _admitted(city, message):
         return
     text = message.text or need.summary
     if clinical(text):
         raise OutOfScope()
+    if not message.need_id:
+        # Every case message has a need_id. Without one, history() reads the whole mailbox (up to
+        # 5 signed pages of 200): the conformance probes have none, and that kept the turn open
+        # past the 5 s custody.ack waits for the lease renew (same fix as the hospital, PR #74).
+        return
     case = await city.history(need_id=message.need_id)
     await handle(role_of(), city, message, case)
 
@@ -279,8 +350,10 @@ async def _await_line(
     token: str,
     *,
     op: str,
+    skip: frozenset[str] = frozenset(),
 ) -> tuple[Message, list[Message]] | None:
-    """The ledger line for ``token``, or a refusal of ``op`` that was not already in ``chat``."""
+    """The ledger line for ``token``, or a refusal of ``op`` that was not already in ``chat``.
+    Rows in ``skip`` (by msg_id) are ignored: a second hold must wait for ITS held line."""
 
     known = {row.msg_id for row in chat}
     fresh = chat
@@ -289,7 +362,7 @@ async def _await_line(
             fresh = await city.history(need_id=need_id)
         except CapError:
             fresh = chat
-        hit = _latest(fresh, head, token)
+        hit = _latest([row for row in fresh if row.msg_id not in skip], head, token)
         if hit is not None:
             return hit, fresh
         for row in fresh:
@@ -878,11 +951,19 @@ def _latest_hold(chat: list[Message], agent: str) -> tuple[str, str | None]:
 
 
 async def _finish_booking(
-    city: City, message: Message, chat: list[Message], slot: str, *, hold_self: bool
+    city: City,
+    message: Message,
+    chat: list[Message],
+    slot: str,
+    *,
+    hold_self: bool,
+    skip: frozenset[str] = frozenset(),
 ) -> None:
     """Hold is in the mailbox. Read the held line and commit before this turn ends."""
 
-    found = await _await_line(city, message.need_id, chat, "held", f"slot_id={slot}", op="hold")
+    found = await _await_line(
+        city, message.need_id, chat, "held", f"slot_id={slot}", op="hold", skip=skip
+    )
     if found is None:
         _LOG.info("care.held.missing", extra={"need_id": (message.need_id or "")[:48]})
         return
@@ -895,7 +976,7 @@ async def _finish_booking(
     if not hold_id:
         return
     done = await _await_line(
-        city, message.need_id, fresh, "committed", f"booking_id={hold_id}", op="commit"
+        city, message.need_id, fresh, "committed", f"booking_id={hold_id}", op="commit", skip=skip
     )
     if done is None:
         _LOG.info("care.commit.missing", extra={"need_id": (message.need_id or "")[:48]})
@@ -1006,6 +1087,7 @@ def _refusal_reason(text: str) -> str:
 # Level 8: the Ledger's own refusal, as the booking centre reads it. These three are a cancel with
 # the code in lower case; any other Ledger code is a hold_refused that names it.
 _CANCEL_CODES = {"prescription_expired", "consent_missing", "no_capacity"}
+_RETRY_CODES = {"EXPIRED", "STALE_FENCE"}
 
 
 def _refusal_line(reason: str, offer_id: str, slot: str, to_centre: bool) -> str:
@@ -1043,6 +1125,21 @@ async def _on_refused(
                 slot = fields_of(row.text).get("slot_id", slot)
     if not slot:
         return
+    # A hold that expired or carries an old fence (console 256, 229, 248): the citizen's confirm is
+    # still good, so hold and commit once more before cancelling. One retry per slot.
+    memory = _sent(f"confirm:{message.need_id or message.msg_id}")
+    if _refusal_reason(message.text).upper() in _RETRY_CODES and f"retry:{slot}" not in memory.offers:
+        prior = [
+            row for row in chat
+            if row.sender == agent and row.recipient == LEDGER and first_word(row.text) == "hold"
+            and f"slot_id={slot}" in row.text.split()
+        ]
+        if prior:
+            memory.offers.add(f"retry:{slot}")
+            if await _say(city, LEDGER, prior[-1].text):
+                known = frozenset(row.msg_id for row in chat)
+                await _finish_booking(city, message, chat, slot, hold_self=hold_self, skip=known)
+                return
     target, _, _ = _booking_of(chat, agent, slot)
     offer_id = _confirmed_offer(chat, agent, slot)
     if not offer_id:
@@ -1181,7 +1278,11 @@ def _is_search(message: Message, agent: str) -> bool:
     if kind & {"confirm", "cancel", "booking.receipt", "offer", "checkin"}:
         return False
     if message.type == "need.request" or "need.request" in kind:
-        return True
+        # A booking centre's search names what it looks for. The city's conformance probes
+        # (need.request service=lab summary=visit from an agent that exists only in the suite)
+        # name none of it: waiting for the Ledger on them kept the turn open past custody.ack's 5 s.
+        fields = _search_fields(message)
+        return bool(fields.get("request_id") or fields.get("procedure") or fields.get("service_type"))
     fields = fields_of(message.text)
     return bool(fields.get("request_id") and (fields.get("procedure") or fields.get("service_type")))
 

@@ -16,7 +16,7 @@ import sys
 import tempfile
 from uuid import uuid4
 
-from city_sdk.city import LEDGER, City, Message, Need
+from city_sdk.city import LEDGER, City, Message, Need, Peer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -47,8 +47,11 @@ def load(cap: str, aid: str):
 
 
 class Index:
+    """city.find: i centri prenotazioni dei test (t01, t02, t09), come li darebbe l'Index vero."""
+
     async def search(self, query):
-        return []
+        return [Peer(agent_id=f"agent:{t}/booking_centre", role="booking_centre",
+                     capabilities=("booking_centre",)) for t in ("t01", "t02", "t09")]
 
 
 class Port:
@@ -590,15 +593,17 @@ async def prova_h() -> None:
                 await asyncio.sleep(3.0)  # come 5 pagine da 200 messaggi via Relay
             return await super().history(peer=peer, need_id=need_id)
 
+    consultorio = "family_counseling" in os.path.normpath(AGENT_FILE).split(os.sep)
+    cap, me = ("family_counseling.gynecology", FC) if consultorio else ("hospital.physiatry", HOSP)
     for label, body in (("prova della conformance (need.request lab/visit)", "need.request summary=visit"),
                         ("chat generica", "ciao")):
-        h = Harness("hospital.physiatry", HOSP, World(HOSP))
-        port = BigMailbox(HOSP)
+        h = Harness(cap, me, World(me))
+        port = BigMailbox(me)
         h.port = port
-        msg = Message(type="chat", sender="agent:t05/osp-x", recipient=HOSP, msg_id=uuid4().hex,
+        msg = Message(type="chat", sender="agent:t05/osp-x", recipient=me, msg_id=uuid4().hex,
                       need_id=None, conversation_id="c-1", body={"text": body})
         port.log.append(msg)
-        city = City(index=Index(), messages=port, history=port, agent_id=HOSP, inbound=msg)
+        city = City(index=Index(), messages=port, history=port, agent_id=me, inbound=msg)
         started = time.perf_counter()
         await h.mod.main(Need(summary=body, message=msg), city)
         elapsed = time.perf_counter() - started
@@ -606,6 +611,8 @@ async def prova_h() -> None:
               f"({elapsed:.2f} s, letture={port.whole_reads})",
               port.whole_reads == 0 and elapsed < 1 and not h.out(""), h)
 
+    if consultorio:
+        return  # con need_id il consultorio e' coperto dalla prova C
     # Un messaggio vero con need_id continua a funzionare (prova B lo copre per intero).
     h = Harness("hospital.physiatry", HOSP, World(HOSP))
     await h.turn(CUP_OWN, CONFIRM)
@@ -639,14 +646,17 @@ async def prova_i() -> None:
 
 
 async def run() -> None:
-    await prova_a()
-    await prova_b()
-    await prova_c()
-    await prova_d()
+    # Ogni agente ha le sue prove: A, B, D, F, G e I provano l'ospedale, C il consultorio; E e H valgono per tutti.
+    if "family_counseling" in os.path.normpath(AGENT_FILE).split(os.sep):
+        await prova_c()
+    else:
+        await prova_a()
+        await prova_b()
+        await prova_d()
+        await prova_f()
+        await prova_g()
+        await prova_i()
     await prova_e()
-    await prova_f()
-    await prova_g()
-    await prova_i()
     await prova_h()
     print(f"\n{'TUTTO OK' if not FAILS else str(len(FAILS)) + ' FALLITE'}")
     sys.exit(1 if FAILS else 0)
