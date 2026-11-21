@@ -359,7 +359,10 @@ async def _on_confirm(
     agent = city.agent_id
     fields = fields_of(message.text)
     offer_id = fields.get("offer_id", "")
-    consent = fields.get("consent_ref", "")
+    # Rule P2 (live from 21/11, agenda 29/12 08:00): a hold in another ASST needs the cross_asst consent,
+    # else the Ledger refuses CONSENT_MISSING. Booking centres that send the booking consent in consent_ref
+    # put it in cross_asst_consent_ref (MACH-1.x) or cross_consent_ref (our CUP): that one goes on the hold.
+    consent = fields.get("cross_asst_consent_ref") or fields.get("cross_consent_ref") or fields.get("consent_ref", "")
     offer = _our_offer(chat, agent, offer_id) if offer_id else {}
     slot = fields.get("slot_id") or offer.get("slot_id", "")
     facility = fields.get("facility") or offer.get("facility", "")
