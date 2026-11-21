@@ -571,7 +571,21 @@ def _lang(chat: list[Message], citizen: str) -> str:
     return "it"
 
 
+def _refused(chat: list[Message], citizen: str, reason: str) -> list[dict[str, str]]:
+    """Our offers the citizen turned down with ``cancel offer_id=... reason=<reason>``."""
+    shown = {o["offer_id"]: o for row in chat if row.sender != citizen for o in _offer_blocks(row.text)}
+    found = []
+    for row in chat:
+        if row.sender == citizen:
+            act, fields = _cup_input(row)
+            if act == "cancel" and fields.get("reason") == reason and fields.get("offer_id") in shown:
+                found.append(shown[fields["offer_id"]])
+    return found
+
+
 def _gender(chat: list[Message], citizen: str) -> str | None:
+    """The doctor's gender the citizen asked for; else the opposite of the one it refused with
+    ``reason=gender`` (the citizens never state it: console 21/11, journeys 255, 249, 225)."""
     for row in reversed(chat):
         if row.sender != citizen:
             continue
@@ -579,10 +593,38 @@ def _gender(chat: list[Message], citizen: str) -> str | None:
         raw = fields.get("gender_preference") or fields.get("gender")
         if isinstance(raw, str) and raw.lower() in {"m", "f"}:
             return raw.lower()
-    return None
+    refused = set()
+    for offer in _refused(chat, citizen, "gender"):
+        spec = _doctor_spec(offer.get("doctor_id", ""))
+        refused.add(spec[1] if spec else offer.get("doctor_gender", ""))
+    return {"m": "f", "f": "m"}.get(next(iter(refused)) if len(refused) == 1 else "")
+
+
+_IT_DAYS = {
+    "lunedi": "mon", "martedi": "tue", "mercoledi": "wed", "giovedi": "thu", "venerdi": "fri",
+    "monday": "mon", "tuesday": "tue", "wednesday": "wed", "thursday": "thu", "friday": "fri",
+}
 
 
 def _cup_days(chat: list[Message], citizen: str) -> set[str]:
+    """Days the citizen can come: days= first, else the weekdays named in its text ("solo lunedì o
+    mercoledì"), minus the weekdays of offers refused with ``reason=day``. Empty: no restriction."""
+    stated = _stated_days(chat, citizen) or _named_days(chat, citizen)
+    refused = {offer.get("agenda_day", "") for offer in _refused(chat, citizen, "day")} & _AGENDA_DAYS
+    left = (stated or set(_AGENDA_DAYS)) - refused
+    return left if refused and left else stated
+
+
+def _named_days(chat: list[Message], citizen: str) -> set[str]:
+    for row in reversed(chat):
+        if row.sender == citizen and "cancel" not in words(row.text):
+            found = {_IT_DAYS[w] for w in re.findall(r"[a-z]+", row.text.lower().replace("ì", "i")) if w in _IT_DAYS}
+            if found:
+                return found
+    return set()
+
+
+def _stated_days(chat: list[Message], citizen: str) -> set[str]:
     for row in reversed(chat):
         if row.sender != citizen:
             continue
@@ -1303,7 +1345,11 @@ async def _cup_offer_batch(
         instruction = f"{note} {instruction}"
     options = []
     delivered = set()
-    for index, slot in enumerate(slots[:3], 1):
+    # One slot per weekday first: three offers on three days beat three on a single day the citizen
+    # may not have (reason=day refusals, console 21/11).
+    seen = set()
+    first = [slot for slot in slots if not (slot.get("day") in seen or seen.add(slot.get("day")))]
+    for index, slot in enumerate([*first, *(slot for slot in slots if slot not in first)][:3], 1):
         line = _offer_line(slot, number, priority, offer_id=f"of-{batch}-{index}")
         if note:
             line += " relaxed=true"
