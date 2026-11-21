@@ -1,4 +1,4 @@
-# Revisione del codice — 21/11 ore 07:00 (Alberto, con Claude)
+# Revisione del codice — 21/11 ore 06:35 (Alberto, con Claude)
 
 Base: `main` a f72ce63. Online: CUP 1.0.23, GP 1.0.4, consultorio 1.0.8, ospedale 1.0.4, specialist 1.0.4 (le correzioni di e2d1518 e f72ce63 non sono ancora pubblicate).
 Fonte dei fatti: percorsi di `/v1/team/journeys/<need_id>`, messaggi di CUP, GP e consultorio da `/v1/team/agents/<id>/messages` (21/11 04:18-05:15 UTC), scoreboard, test in `tools/`, protocollo MACH-1.3.
