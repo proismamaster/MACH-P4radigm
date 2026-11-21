@@ -76,8 +76,8 @@ class LeadTests(unittest.TestCase):
         ]
         slots, _ = cup._cup_partner_slots(chat, {partner: "rq-1"}, "VIS-FIS", "B", NOW, citizen, set())
         self.assertNotIn("P-full", [s["slot_id"] for s in slots], "capacity=0: il posto e' pieno")
-        self.assertEqual([s["slot_id"] for s in slots], ["P-far", "P-free"],
-                         "come per la nostra ASST: prima i 30 ore o piu', P-near (1 ora e mezza) mai")
+        self.assertEqual([s["slot_id"] for s in slots], ["P-free", "P-far"],
+                         "priorita' B: il piu' vicino oltre le 4 ore prima; P-near (1 ora e mezza) mai")
 
 
 class ConfirmDeadlineTests(unittest.IsolatedAsyncioTestCase):

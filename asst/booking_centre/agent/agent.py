@@ -285,6 +285,10 @@ def _when(value: str) -> datetime | None:
     return parsed
 
 
+def _utc(at: datetime) -> str:
+    return at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
 def _citizen(chat: list[Message]) -> str | None:
     for row in chat:
         if row.sender.startswith("citizen:"):
@@ -412,6 +416,25 @@ def _ahead(now: datetime, at: datetime) -> timedelta:
     return gap
 
 
+def _lead(priority: str | None) -> timedelta:
+    """B and U windows are short: the soonest slot past the minimum wins. Elsewhere 30 hours first."""
+    return _MIN_LEAD if priority in ("B", "U") else _LEAD
+
+
+# Console 21/11: the citizen writes to the CUP 19-20 real minutes (agenda hours) after the GP's
+# prescription, and its B/D deadline counts from the prescription (187: B prescribed Tue 01/12 ~05:00,
+# 03/12 10:30 refused for deadline, 02/12 10:30 confirmed). Our window started when WE answered.
+_TO_CUP = timedelta(hours=20)
+
+
+def _true_deadline(chat: list[Message], citizen: str, priority: str | None) -> datetime | None:
+    if priority not in _DEADLINE_DAYS:
+        return None
+    first = next((row for row in chat if row.sender == citizen and row.sent_at), None)
+    start = _agenda_now(chat, _when(first.sent_at)) if first is not None else None
+    return None if start is None else _agenda_horizon(start - _TO_CUP, _DEADLINE_DAYS[priority])
+
+
 def fitting(
     lines: list[str],
     *,
@@ -423,6 +446,7 @@ def fitting(
     procedure: str | None = None,
     days: set[str] | None = None,
     relax_window: bool = False,
+    until: datetime | None = None,
 ) -> list[dict[str, str]]:
     """Available slots that satisfy the citizen's preferences and the prescribed priority."""
 
@@ -432,7 +456,10 @@ def fitting(
         horizon = now.replace(hour=23, minute=59, second=59, microsecond=0)
     else:
         horizon = _agenda_horizon(now, _DEADLINE_DAYS.get(priority or "", 14))
+    if until is not None and horizon is not None and not relax_window:
+        horizon = min(horizon, until)
     earliest = now + _MIN_LEAD
+    lead = _lead(priority)
     chosen: list[tuple[datetime, dict[str, str]]] = []
     for line in lines:
         slot = fields_of(line)
@@ -471,7 +498,7 @@ def fitting(
         if gender and spec[1] != gender:
             continue
         chosen.append((at, slot))
-    chosen.sort(key=lambda item: (_ahead(now, item[0]) < _LEAD, item[0], item[1].get("slot_id", "")))
+    chosen.sort(key=lambda item: (_ahead(now, item[0]) < lead, item[0], item[1].get("slot_id", "")))
     return [slot for _, slot in chosen]
 
 
@@ -633,6 +660,9 @@ def _gender(chat: list[Message], citizen: str) -> str | None:
 _IT_DAYS = {
     "lunedi": "mon", "martedi": "tue", "mercoledi": "wed", "giovedi": "thu", "venerdi": "fri",
     "monday": "mon", "tuesday": "tue", "wednesday": "wed", "thursday": "thu", "friday": "fri",
+    # "posso solo lun/mer/ven" (288)
+    "lun": "mon", "mar": "tue", "mer": "wed", "gio": "thu", "ven": "fri",
+    "mon": "mon", "tue": "tue", "wed": "wed", "thu": "thu", "fri": "fri",
 }
 
 
@@ -1205,6 +1235,8 @@ def _cup_partner_slots(
         horizon = now.replace(hour=23, minute=59, second=59, microsecond=0)
     else:
         horizon = _agenda_horizon(now, _DEADLINE_DAYS[priority])
+    if (until := _true_deadline(chat, citizen, priority)) is not None:
+        horizon = min(horizon, until)
     earliest = now + _MIN_LEAD
     for row in chat:
         request_id = searches.get(row.sender)
@@ -1277,11 +1309,13 @@ def _cup_partner_slots(
                 continue
             slots[row.sender, slot_id] = {
                 "slot_id": slot_id, "doctor_id": doctor, "facility": row.sender,
-                "procedure": procedure, "at": fields["agenda_date"], "day": day,
-                "expiry": fields.get("expiry") or fields["agenda_date"], "partner_offer_id": offer_id, "request_id": request_id,
+                # Forward the date in UTC with its Z: a partner's date without an offset was judged a
+                # false agenda_date (audit false_attribute -2, journeys 293, 134, 191).
+                "procedure": procedure, "at": _utc(at), "day": day,
+                "expiry": _utc(min(expiry, at)), "partner_offer_id": offer_id, "request_id": request_id,
             }
     ordered = sorted(
-        slots.values(), key=lambda slot: (_ahead(now, _when(slot["at"])) < _LEAD, _when(slot["at"]), slot["slot_id"])
+        slots.values(), key=lambda slot: (_ahead(now, _when(slot["at"])) < _lead(priority), _when(slot["at"]), slot["slot_id"])
     )
     return ordered, answered
 
@@ -1563,7 +1597,7 @@ async def _advance_alone(
     language, gender = _lang(chat, citizen), _gender(chat, citizen)
     chosen = fitting(
         lines, now=now, priority=priority, lang=language, gender=gender, procedure=procedure,
-        days=_cup_days(chat, citizen),
+        days=_cup_days(chat, citizen), until=_true_deadline(chat, citizen, priority),
     )
     if chosen:
         await _cup_offer_batch(city, message, sent, citizen, chosen, number, priority, replacing=replacing)
