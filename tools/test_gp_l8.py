@@ -64,6 +64,7 @@ class SilentLedger:
 
 print("World lento")
 gp._PULL_PAUSE = 0.0
+gp._WORLD_WAIT = 0.0  # #135: the turn reads the history for world up to 180 s; this Ledger never answers
 got = asyncio.run(gp._gp_select_protocol(SilentLedger(), msg("ginocchio"), [], "citizen:t/c-1", "SYM-KNEE", None))
 check("senza world il GP non prescrive (red flag nascoste nel world)", got is None)
 

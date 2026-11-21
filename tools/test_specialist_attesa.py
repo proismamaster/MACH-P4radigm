@@ -47,8 +47,9 @@ COMMITTED = msg(5, LEDGER, ME, "committed booking_id=H-A ledger_ref=L-A hold_id=
 class FakeCity:
     agent_id = ME
 
-    def __init__(self, held_after):
+    def __init__(self, held_after, committed=None):
         self.reads, self.held_after, self.sent = 0, held_after, []
+        self.committed = committed or COMMITTED
 
     async def say(self, to, text, **_):
         self.sent.append((to, text))
@@ -61,12 +62,12 @@ class FakeCity:
             rows.append(HELD)
         commits = [t for to, t in self.sent if to == LEDGER and t.startswith("commit ")]
         if commits:
-            rows += [msg(4, ME, LEDGER, commits[0]), COMMITTED]
+            rows += [msg(4, ME, LEDGER, commits[0]), self.committed]
         return rows
 
 
-def run(held_after):
-    city = FakeCity(held_after)
+def run(held_after, committed=None):
+    city = FakeCity(held_after, committed)
     started = time.monotonic()
     asyncio.run(mod._finish_booking(city, CASE[0], list(CASE), "S-A", hold_self=False))
     commits = [t for to, t in city.sent if to == LEDGER and t.startswith("commit ")]
@@ -78,6 +79,11 @@ print("Specialist - held dopo le letture rapide (Ledger lento)")
 commits, receipts, _ = run(held_after=40)  # the quick reads are 24
 check("held alla lettura 41: commit dell'hold nello stesso turno", len(commits) == 1 and "hold_id=H-A" in commits[0])
 check("committed: ricevuta al CUP con slot_id", len(receipts) == 1 and "slot_id=S-A" in receipts[0])
+print("Specialist - committed con booking_id diverso da hold_id (Abed, #137)")
+other = msg(5, LEDGER, ME, "committed booking_id=bk-A ledger_ref=L-A hold_id=H-A")
+commits, receipts, took = run(held_after=0, committed=other)
+check("ricevuta al CUP con il booking_id del Ledger", len(receipts) == 1 and "booking_id=bk-A" in receipts[0])
+check("nessuna attesa a vuoto dopo il committed", took < 0.4)
 commits, receipts, took = run(held_after=10 ** 9)
 check("held mai arrivato: nessun commit", commits == [] and receipts == [])
 check("held mai arrivato: il turno finisce entro l'attesa", took < 3.0)

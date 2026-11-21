@@ -312,6 +312,8 @@ async def _await_line(
                 continue
             if first_word(row.text) == "refused" and op in words(row.text):
                 return row, fresh
+            if head == "committed" and first_word(row.text) == "committed":
+                return row, fresh  # the Ledger's booking_id may differ from the hold_id (as the hospital does)
         attempt += 1
         if patient:
             elapsed = monotonic() - started
