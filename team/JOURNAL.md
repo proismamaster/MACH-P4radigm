@@ -1,5 +1,21 @@
 # Journal (la voce più recente in alto)
 
+## 2026-11-21 10:25 — Andrei (Claude) — Ospedale: review di `main`, catena confirm → hold (caso tipo 3590002), registro dei rilasci
+
+**Catena del confirm, provata in locale** (CUP vero + ospedale vero, orologio finto a 60x; script in scratchpad): con un confirm del cittadino 55 s dopo l'offerta il CUP inoltra subito `confirm ... slot_id= consent_ref= facility=agent:...` all'ospedale, e l'ospedale manda l'`hold` al Ledger nello stesso turno, anche con il Ledger che risponde al turno dopo, con `held` e `committed` in turni separati e con il confirm ripetuto (un solo hold). Se il confirm arriva all'ospedale, l'hold parte. Dove la catena si può fermare senza hold:
+- **CUP, in silenzio**: `_cup_confirm` esce senza dire niente se `uncertain_confirmation` è rimasto vero (un 5xx o DUPLICATE sull'inoltro di un confirm precedente dello stesso need), se l'offerta non è nell'ultimo lotto mandato, se manca il consenso, se c'è già un confirm in sospeso per un'altra offerta.
+- **CUP, con messaggio**: `slot_expired` (1870004: confirm 04:08:54, risposta 04:13:24 dopo 4,5 minuti di turno; lo slot era a 1 ora).
+- **Ledger**: risponde in 7-9 minuti (PROBLEMS 06:15). Il giudice conta i fatti scritti fino a un minuto dopo la fine del percorso: un hold mandato ma non ancora scritto dal Ledger non compare nel verdetto.
+- Per 3590002 serve il JSON del percorso (console → Journeys): se dopo il confirm il CUP tace è il CUP; se il CUP risponde `facility_cancelled` è l'ospedale o il Ledger. L'export non ha i messaggi tra agenti: per vedere il confirm all'ospedale servono `/v1/team/agents/agent:bb01ggxymm05/messages` o `/v1/logs` dal vivo.
+
+**Review di `b5dcb99` per l'ospedale** (l'unica differenza tra la 1.0.4 online e `main`): per B e U l'ospedale offriva ai CUP partner lo slot più vicino oltre **4 ore**, calcolate sull'`agenda_now` **grezzo** del Ledger (vecchio di ore d'agenda quando arriva). Un CUP di un'altra squadra che non manda `earliest=` riceveva slot già vicini o passati: confirm, hold rifiutato, nessun hold nel verdetto. Corretto (`andrei/ospedale-orologio`):
+- orologio d'agenda estrapolato (`_agenda_now`, uguale a CUP e consultorio) nelle risposte alle ricerche;
+- anticipo minimo 10 ore (U 4) nelle offerte, come CUP e consultorio;
+- `_our_offer` legge la riga dell'offerta, non tutto il messaggio: un confirm con il solo `offer_id` della seconda offerta faceva l'hold sulla prima.
+- Test: Prove L e M nuove in `tools/test_facility.py`, Prova K aggiornata (N-1 a 5 ore e N-2 a 8 ore non si offrono più per B e D). Tutte le suite verdi; `test_mach12_struttura.py` ha gli stessi fallimenti di `main` (offerte rilassate MACH-1.2 mai fatte nell'ospedale).
+
+**Registro dei rilasci**: nuovo `team/RILASCI.md` (ora UTC, versione, deployment, commit, contenuto, rollback; regole di attribuzione: un passo appartiene alla versione online all'ora del passo).
+
 ## 2026-11-21 09:40 — Andrei (Claude) — 24 percorsi falliti della console: cause e correzioni
 
 **Fatto** (percorsi di Andrei dalla console, 21/11 01:36-04:19 UTC)
