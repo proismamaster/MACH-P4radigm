@@ -1,7 +1,7 @@
 agent_id: agent:ez8cb7j167p2
 team: team:p4radigm
 name: booking_centre
-version: 1.0.19
+version: 1.0.20
 cap_versions:
   - "1.0"
 profiles:
