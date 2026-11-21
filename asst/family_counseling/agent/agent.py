@@ -831,8 +831,14 @@ async def _advance_alone(
         if slot.get("slot_id") not in taken
     ]
     if chosen:
-        for slot in chosen[:3]:
-            if await _say(city, citizen, _offer_line(slot, number, priority)):
+        # Every offer in ONE message: the citizen chooses in the turn of a single message (kit).
+        # One message per offer left the citizen confirming the first one 18-34 minutes later,
+        # already expired (journeys 256, 1970005).
+        picked = chosen[:3]
+        lines = [_offer_line(slot, number, priority) for slot in picked]
+        lines.append("Mi risponda con l'orario che preferisce; se nessuno le va bene, me lo dica e cerco altre date.")
+        if await _say(city, citizen, "\n".join(lines)):
+            for slot in picked:
                 sent.offers.add(slot["slot_id"])
                 if replacing:
                     sent.again.add(slot["slot_id"])

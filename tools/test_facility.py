@@ -334,6 +334,20 @@ async def prova_c() -> None:
           any("slot_id=C-1" in t and "request_id=rq-F1" in t for t in h.out(CUP_EXT, "offer")), h)
     check("ricerca esterna: nessuna offerta diretta a cittadini", not h.out("citizen:", "offer"), h)
 
+    # Il cittadino sceglie nel turno di UN messaggio (kit): con un'offerta per messaggio i percorsi
+    # 256 e 1970005 hanno confermato la prima dopo 18 e 34 minuti, quando era gia' scaduta.
+    rows3 = [
+        "slot_id=C-1 doctor_id=D-zz9 facility=ME procedure=CONS-GIN at=2026-11-24T09:00:00+01:00 day=tue free=1",
+        "slot_id=C-2 doctor_id=D-zz9 facility=ME procedure=CONS-GIN at=2026-11-25T09:00:00+01:00 day=wed free=1",
+        "slot_id=C-3 doctor_id=D-zz9 facility=ME procedure=CONS-GIN at=2026-11-26T09:00:00+01:00 day=thu free=1",
+    ]
+    h = Harness("family_counseling.gynecology", FC, World(FC, {"CONS-GIN:1": slots_reply(FC, rows3)}))
+    await h.turn(CIT2, "vorrei una visita ginecologica")
+    offers = h.out(CIT2, "offer")
+    lines = [l for t in offers for l in t.splitlines() if l.startswith("offer ")]
+    check("consultorio: tutte le offerte in UN solo messaggio",
+          len(offers) == 1 and len(lines) == 3, h)
+
 
 class LiveWorld(World):
     """Ledger come in Arena: un secondo commit sullo stesso hold e' rifiutato."""
