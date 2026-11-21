@@ -19,7 +19,7 @@ Controllato con `city --json status` alle 13:11 UTC.
 |---|---|---|---|---|---|
 | gp | `agent:rng5wcrzvhsj` | 1.0.8 | 12:54 | `dep-2d32afeb19854e3caaa323037142db3d` | 1.0.7 |
 | booking_centre | `agent:ez8cb7j167p2` | 1.0.27 (#118, senza #119) | 12:07 | `dep-dd35e91a32ac49fe948493ddac02d1f9` | 1.0.26 secondo build (con #119) o 1.0.25 |
-| hospital | `agent:bb01ggxymm05` | 1.0.7 | 10:47 | `dep-bbe98f223dff429490fb412e3eaa7e39` | 1.0.6 |
+| hospital | `agent:bb01ggxymm05` | 1.0.8 | 13:17 | `dep-52f91aabb13a409192f537c97397d2ac` | 1.0.7 |
 | specialist | `agent:sh35cbsy287d` | 1.0.11 | 13:10 | `dep-086fb4eecd7443579088651be26d69b7` | 1.0.10 |
 | family_counseling | `agent:nkh372rd16yq` | 1.0.14 | 11:45 | `dep-a3b16f15ea954d64814b20edde0e05f6` | 1.0.13 |
 
@@ -69,4 +69,5 @@ Prossimi numeri (card su `main`): CUP 1.0.28, GP 1.0.8, ospedale 1.0.8, speciali
 | 21/11 12:07 | booking_centre | 1.0.27 | deploy (Ismail/Opus) + `city scale --concurrency 32` | `dep-dd35e91a32ac49fe948493ddac02d1f9` | `7337b26` | **tolta la #119** (B a 20 ore): export 10:53-11:53 UTC, dopo le 11:18 i rifiuti per scadenza per offerta raddoppiano (0,45 -> 0,90) e le conferme nei falliti scendono da 16 a 1 (#131). Contiene #118. Scale riapplicato dopo il rilascio. Conformance PASS. |
 | 21/11 12:54 | gp | 1.0.8 | deploy (Andrei) | `dep-2d32afeb19854e3caaa323037142db3d` | `f1f989a` | #135: `history` in 504 non chiude il turno (3 tentativi, poi escalation se red flag, nessuna ricetta alla cieca), `prescribed` atteso fino a 420 s (era 90), `world` atteso nella storia fino a 180 s (era 6). Conformance PASS (11,7 s). |
 | 21/11 13:10 | specialist | 1.0.11 | deploy (Andrei) | `dep-086fb4eecd7443579088651be26d69b7` | `a926139` | #139 sopra l'attesa di Ismail (1.0.10): attesa del Ledger 420 s, rifiuto immediato del Relay sull'hold al CUP, slot presi segnati con cancel `no_capacity` subito, ricerche dei partner da agenda e pagina gia' lette (risposta subito). Card portata a 1.0.11 a mano prima del deploy: la 1.0.10 era gia' online. Conformance PASS (23,3 s). |
+| 21/11 13:17 | hospital | 1.0.8 | deploy (Andrei) | `dep-52f91aabb13a409192f537c97397d2ac` | `8e982d3` | #142: ricerche dei CUP partner da agenda e pagina gia' lette in altri casi (fino a 120 s, risposta subito invece di un giro del Ledger), attesa paziente 420 s (era 180), `checked_in` letto nella cronologia. Conformance PASS (28,4 s). |
 Commit: per le righe fino alle 07:29 è il commit del bump della card (il codice rilasciato è quello del suo genitore su `main`); dalle prossime, lo SHA di `main` rilasciato. Le righe con «—» sono ricostruite dai commit: chi ha fatto quei deploy può completare il deployment.
