@@ -14,7 +14,7 @@ spec = importlib.util.spec_from_file_location("spec_rif", os.path.join(REPO, "as
 mod = importlib.util.module_from_spec(spec)
 sys.modules["spec_rif"] = mod
 spec.loader.exec_module(mod)
-mod._WAIT_SECONDS = 0.0  # the fake Ledger never answers a hold: no patient wait
+mod._WAIT_SECONDS = 0.0  # niente attesa paziente del Ledger nelle prove (la vera e' 420 s)
 
 ME = "agent:sh35cbsy287d"
 CUP = "agent:altra/cup"

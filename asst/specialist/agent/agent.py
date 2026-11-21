@@ -75,12 +75,7 @@ _LOG = logging.getLogger("care")
 # the case history and never opens a turn. Wait briefly and read it back from history.
 _PULL_TRIES = 24
 _PULL_PAUSE = 0.25
-# Console 21/11 (hospital, tools/misura_latenze.js): held -> commit through the push took a median 107 s and the
-# commit came back STALE_FENCE 10 of 12; a hold lasts about two minutes. After a hold the confirm turn reads the
-# history for up to _WAIT_SECONDS, as the hospital and the consultorio do (exports 11:08-11:53 UTC: 11 confirms
-# to this specialist never answered, 11 facility_cancelled).
-_WAIT_SECONDS = 180.0
-_WAIT_STEP = 1.0
+# Patient wait of the confirm turn: _WAIT_SECONDS and _WAIT_STEP are set below, next to _await_line.
 # Needs whose sent offers this process remembers; the oldest is forgotten first.
 _SENT_NEEDS = 4096
 
@@ -291,10 +286,13 @@ async def _await_line(
     token: str,
     *,
     op: str,
+    skip: frozenset[str] = frozenset(),
     patient: bool = False,
 ) -> tuple[Message, list[Message]] | None:
     """The ledger line for ``token``, or a refusal of ``op`` that was not already in ``chat``.
-    ``patient`` reads the case for up to _WAIT_SECONDS instead of _PULL_TRIES times."""
+
+    Rows in ``skip`` (msg_id) are ignored: a new hold waits for ITS held line. ``patient`` reads the case
+    for up to _WAIT_SECONDS (the Ledger's reply is in the history before the push opens a turn)."""
 
     known = {row.msg_id for row in chat}
     fresh = chat
@@ -304,7 +302,7 @@ async def _await_line(
             fresh = await city.history(need_id=need_id)
         except CapError:
             fresh = chat
-        hit = _latest(fresh, head, token)
+        hit = _latest([row for row in fresh if row.msg_id not in skip], head, token)
         if hit is not None:
             return hit, fresh
         for row in fresh:
@@ -313,17 +311,124 @@ async def _await_line(
             if first_word(row.text) == "refused" and op in words(row.text):
                 return row, fresh
             if head == "committed" and first_word(row.text) == "committed":
-                return row, fresh  # the Ledger's booking_id may differ from the hold_id (as the hospital does)
+                return row, fresh  # one commit in flight per case: a new committed line answers it
         attempt += 1
         if patient:
             elapsed = monotonic() - started
             if elapsed >= _WAIT_SECONDS:
                 return None
-            await asyncio.sleep(_WAIT_STEP if elapsed < 30 else 2 * _WAIT_STEP)  # a read is a signed relay call
+            await asyncio.sleep(_WAIT_STEP if elapsed < 30 else 2 * _WAIT_STEP)
         else:
             if attempt >= _PULL_TRIES:
                 return None
             await asyncio.sleep(_PULL_PAUSE)
+
+
+# Console 21/11 (Alberto, tools/misura_latenze.js): specialist hold NO_CAPACITY 112, commit STALE_FENCE 17 of
+# 24 (`held` -> commit 61-87 s). A hold lasts about two minutes; the Ledger's reply is in the case history as
+# soon as the Relay accepts it, the push comes 60-90 s later, and the Ledger itself took 208-217 s at 10:06
+# UTC. The confirm turn reads the history for held and committed (as the consultorio and the hospital).
+_WAIT_SECONDS = 420.0
+_WAIT_STEP = 1.0
+
+# Slots of this specialist that this process knows are not free (held 150 s, booked or past for good): not
+# offered to booking centres, and a confirm on one is answered at once with cancel reason=no_capacity.
+_GONE_FOR = {"held": 150.0, "full": 150.0, "past": 1e9, "booked": 1e9}
+_GONE: dict[str, tuple[float, str, str]] = {}
+
+
+def _mark_gone(slot: str, why: str, owner: str = "") -> None:
+    if slot:
+        _GONE[slot] = (monotonic() + _GONE_FOR[why], why, owner)
+
+
+def _free_again(slot: str, owner: str = "") -> None:
+    mark = _GONE.get(slot)
+    if mark and mark[1] in {"held", "full"} and mark[2] in {"", owner}:
+        del _GONE[slot]
+
+
+def _gone(besides: str = "") -> set[str]:
+    now = monotonic()
+    for slot in [slot for slot, mark in _GONE.items() if mark[0] <= now]:
+        del _GONE[slot]
+    return {slot for slot, (_, why, owner) in _GONE.items() if not besides or owner != besides or why == "past"}
+
+
+def _hold_open(chat: list[Message], agent: str, slot: str) -> bool:
+    """We sent a hold for ``slot`` in this case and the Ledger has not refused it (or its commit) since."""
+    token = f"slot_id={slot}"
+    last = None
+    for index, row in enumerate(chat):
+        if row.sender == agent and row.recipient == LEDGER and first_word(row.text) == "hold" and token in row.text.split():
+            last = index
+    if last is None:
+        return False
+    holds: set[str] = set()
+    for row in chat[last + 1 :]:
+        if row.sender != LEDGER:
+            continue
+        head, fields = first_word(row.text), fields_of(row.text)
+        if head == "held" and fields.get("slot_id") == slot:
+            holds.add(fields.get("hold_id", ""))
+        elif head == "refused" and (fields.get("slot_id") == slot or fields.get("hold_id") in holds):
+            return False
+    return True
+
+
+# The Ledger's latest agenda and slot pages, whatever case they came in: the world is the ASST's, the same
+# for every case. A search from a booking centre is a new case with neither; reading them again costs a
+# Ledger round trip (40-220 s) while the asker waits 15-20 s for partner replies.
+_READS_FRESH = 120.0  # real seconds a slot page stays usable for a search
+_AGENDA_RATE = 60  # one real minute is one agenda hour
+_LEDGER_READS: dict[str, tuple[str, float]] = {}  # "agenda" or procedure -> (text, when read, monotonic)
+
+
+def _remember_reads(chat: list[Message]) -> None:
+    for row in chat:
+        if row.sender != LEDGER:
+            continue
+        head = first_word(row.text)
+        if head == "agenda" and "agenda_now=" in row.text:
+            key = "agenda"
+        elif head == "slots":
+            procs = {fields_of(line).get("procedure") for line in row.text.splitlines()[1:]} - {None}
+            if len(procs) != 1 or _page_of(row.text) != 1:
+                continue
+            key = procs.pop()
+        else:
+            continue
+        seen = _LEDGER_READS.get(key)
+        if seen is None or seen[0] != row.text:
+            _LEDGER_READS[key] = (row.text, monotonic())
+
+
+def _page_of(text: str) -> int:
+    page = fields_of(text.splitlines()[0] if text else "").get("page", "1/1").split("/", 1)[0]
+    return int(page) if page.isdigit() else 1
+
+
+def _agenda_add(start: datetime, delta: timedelta) -> datetime:
+    """``start`` plus ``delta`` of agenda time; Saturday and Sunday do not exist in the agenda."""
+    out = start
+    while delta > timedelta(0):
+        midnight = (out + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        step = min(delta, midnight - out)
+        out, delta = out + step, delta - step
+        if out.weekday() >= 5:
+            out += timedelta(days=7 - out.weekday())
+    return out
+
+
+def _cached_reads(procedure: str) -> tuple[str, datetime] | None:
+    """A recent slot page for ``procedure`` and the agenda clock now (last agenda_now + real time x60)."""
+    page, agenda = _LEDGER_READS.get(procedure), _LEDGER_READS.get("agenda")
+    if page is None or agenda is None or monotonic() - page[1] > _READS_FRESH:
+        return None
+    at = _search_when(fields_of(agenda[0]).get("agenda_now", ""))
+    if at is None:
+        return None
+    return page[0], _agenda_add(at, timedelta(seconds=monotonic() - agenda[1]) * _AGENDA_RATE)
 
 
 # --- medico di base ----------------------------------------------------------------------------
@@ -393,16 +498,39 @@ async def _on_confirm(
     number = fields.get("prescription_number") or offer.get("prescription_number")
     book_here = hold_self or message.sender.startswith("agent:") or facility == agent
     if book_here:
-        if not _we(chat, agent, f"slot_id={slot}", to=LEDGER, word="hold"):
+        case = message.need_id or message.msg_id
+        if slot in _gone(besides=case):
+            # Another case of this process holds or booked it, or it has passed: a hold would only be
+            # refused a minute or two later. Answer now, once per confirm.
+            if not _we(chat, agent, f"slot_id={slot}", to=message.sender, word="cancel"):
+                why = _GONE.get(slot, (0.0, "", ""))[1]
+                _LOG.warning("care.hold.gone need=%s slot=%s why=%s", case[:48], slot, why)
+                await _refuse_now(city, message, chat, slot, "EXPIRED" if why == "past" else "NO_CAPACITY",
+                                  hold_self=hold_self)
+            return
+        skip: frozenset[str] = frozenset()
+        if not _hold_open(chat, agent, slot):
+            skip = frozenset(row.msg_id for row in chat if row.sender == LEDGER and f"slot_id={slot}" in row.text.split())
             parts = ["hold", f"slot_id={slot}"]
             if citizen:
                 parts.append(f"citizen={citizen}")
             if number:
                 parts.append(f"prescription_number={number}")
             parts.append(f"consent_ref={consent}")
-            if not await _say(city, LEDGER, " ".join(parts)):
-                return
-        await _finish_booking(city, message, chat, slot, hold_self=hold_self)
+            try:
+                await city.say(LEDGER, " ".join(parts))
+            except CapError as error:
+                # The Relay can refuse the hold at once (EXPIRED, NO_CAPACITY...): before, _say swallowed
+                # it and the confirm stayed without an answer. A definite refusal goes back like a Ledger
+                # `refused hold`; an uncertain one (5xx) waits for the booking centre's resent confirm.
+                _LOG.warning("care.hold.failed need=%s slot=%s code=%s", case[:48], slot, error.code)
+                if error.code not in {"DUPLICATE", "IDEMPOTENCY_CONFLICT"}:
+                    if error.code not in _UNCERTAIN and error.code != "TARGET_NOT_VISIBLE":
+                        await _refuse_now(city, message, chat, slot, error.code, hold_self=hold_self)
+                    return
+            else:
+                _mark_gone(slot, "held", case)
+        await _finish_booking(city, message, chat, slot, hold_self=hold_self, skip=skip)
         return
     if not facility or not citizen:
         return
@@ -421,6 +549,22 @@ async def _on_confirm(
     await _say(city, facility, " ".join(parts))
 
 
+_UNCERTAIN = {"RATE_LIMITED", "DRAINING", "QUARANTINED", "SUSPENDED", "UPSTREAM_TIMEOUT", "AGENT_LOST_CUSTODY"}
+
+
+async def _refuse_now(
+    city: City, message: Message, chat: list[Message], slot: str, code: str, *, hold_self: bool
+) -> None:
+    """Answer a confirm as if the Ledger had refused its hold with ``code``."""
+    refusal = Message(
+        type="chat", sender=LEDGER, recipient=city.agent_id, msg_id=f"relay-{message.msg_id}",
+        need_id=message.need_id, conversation_id=message.conversation_id,
+        body={"text": f"refused hold slot_id={slot} code={code}"},
+    )
+    rows = chat if any(row.msg_id == message.msg_id for row in chat) else [*chat, message]
+    await _on_refused(city, refusal, rows, hold_self=hold_self)
+
+
 # --- facility ----------------------------------------------------------------------------------
 
 
@@ -434,6 +578,7 @@ async def _facility(
 ) -> None:
     head = first_word(message.text)
     kind = words(message.text)
+    _remember_reads(chat)
     if not (message.sender == LEDGER and head == "held"):
         await _commit_late_holds(city, message, chat)
     if message.sender.startswith("agent:") and head == "need.request":
@@ -525,10 +670,12 @@ async def _answer_partner_search(city: City, message: Message) -> None:
     if (service and not service.startswith("specialist_care")) or procedure not in _SPEC_PROCEDURES:
         await _say(city, message.sender, f"cancel reason=procedure_not_offered request_id={rid}")
         return
-    await _say(city, LEDGER, "agenda")
-    await _say(city, LEDGER, f"world procedure={procedure} page=1")
-    slots_text, now = None, None
-    for attempt in range(_PULL_TRIES):
+    cached = _cached_reads(procedure)
+    slots_text, now = cached if cached is not None else (None, None)
+    if cached is None:
+        await _say(city, LEDGER, "agenda")
+        await _say(city, LEDGER, f"world procedure={procedure} page=1")
+    for attempt in range(0 if cached is not None else _PULL_TRIES):
         try:
             rows = await city.history(need_id=message.need_id)
         except CapError:
@@ -541,6 +688,7 @@ async def _answer_partner_search(city: City, message: Message) -> None:
             elif first_word(row.text) == "agenda":
                 now = _search_when(fields_of(row.text).get("agenda_now", "")) or now
         if slots_text and now:
+            _remember_reads(rows)
             break
         if attempt + 1 < _PULL_TRIES:
             await asyncio.sleep(_PULL_PAUSE)
@@ -549,7 +697,8 @@ async def _answer_partner_search(city: City, message: Message) -> None:
         return
     me = city.agent_id
     lines = []
-    for slot in _search_slots(slots_text, now=now, me=me, fields=fields)[:3]:
+    gone = _gone()
+    for slot in [slot for slot in _search_slots(slots_text, now=now, me=me, fields=fields) if slot["slot_id"] not in gone][:3]:
         lang, sex, _ = _SPEC_DOCTORS[slot["doctor_id"]]
         lines.append(
             f"offer offer_id=of-{slot['slot_id']} slot_id={slot['slot_id']} doctor_id={slot['doctor_id']} "
@@ -618,11 +767,14 @@ def _latest_hold(chat: list[Message], agent: str) -> tuple[str, str | None]:
 
 
 async def _finish_booking(
-    city: City, message: Message, chat: list[Message], slot: str, *, hold_self: bool
+    city: City, message: Message, chat: list[Message], slot: str, *, hold_self: bool,
+    skip: frozenset[str] = frozenset(),
 ) -> None:
-    """Hold is in the mailbox. Read the held line and commit before this turn ends."""
+    """Hold is in the mailbox. Read the held line and commit before this turn ends (patient wait)."""
 
-    found = await _await_line(city, message.need_id, chat, "held", f"slot_id={slot}", op="hold", patient=True)
+    found = await _await_line(
+        city, message.need_id, chat, "held", f"slot_id={slot}", op="hold", skip=skip, patient=True
+    )
     if found is None:
         _LOG.warning("care.held.missing need=%s slot=%s", message.need_id, slot)
         return
@@ -674,6 +826,7 @@ async def _on_held(city: City, message: Message, chat: list[Message]) -> None:
     if not hold_id or not slot:
         _LOG.info("care.held.skip", extra={"head": first_word(message.text)[:40]})
         return
+    _mark_gone(slot, "held", message.need_id or "")
     if _our_commit(chat, city.agent_id, hold_id):
         return
     _, consent, number = _booking_of(chat, city.agent_id, slot)
@@ -705,7 +858,14 @@ async def _on_committed(city: City, message: Message, chat: list[Message]) -> No
     ledger_ref = fields.get("ledger_ref", "")
     if not booking_id or not ledger_ref:
         return
-    slot = fields.get("slot_id") or _hold_slot(chat, city.agent_id, fields.get("hold_id", ""))
+    slot = fields.get("slot_id") or _hold_slot(chat, city.agent_id, fields.get("hold_id") or booking_id)
+    if not slot:
+        # The committed line may name neither the slot nor the hold: our latest hold, as in the hospital.
+        for row in chat:
+            if row.sender == city.agent_id and row.recipient == LEDGER and first_word(row.text) == "hold":
+                slot = fields_of(row.text).get("slot_id", slot)
+    if slot:
+        _mark_gone(slot, "booked", message.need_id or "")
     sender, _, _ = _booking_of(chat, city.agent_id, slot) if slot else ("", "", None)
     target = sender or _citizen(chat)
     if not target:
@@ -748,6 +908,12 @@ async def _on_refused(
     target, _, _ = _booking_of(chat, agent, slot)
     if not target or _receipt_sent(chat, agent, target, slot):
         return  # never cancel after a valid receipt
+    if "commit" in words(message.text):
+        _free_again(slot, message.need_id or "")  # the hold lapsed (STALE_FENCE): free again
+    elif code.upper() == "EXPIRED":
+        _mark_gone(slot, "past")
+    elif code.upper() == "NO_CAPACITY" and slot not in _GONE:
+        _mark_gone(slot, "full")
     offer_id = ""
     for row in chat:
         if row.sender == target and f"slot_id={slot}" in row.text.split() and "confirm" in words(row.text):

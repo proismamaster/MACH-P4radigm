@@ -17,6 +17,7 @@ mod = importlib.util.module_from_spec(spec)
 sys.modules["spec_hist"] = mod
 spec.loader.exec_module(mod)
 mod._PULL_PAUSE = 0
+mod._WAIT_SECONDS = 0.0  # niente attesa paziente del Ledger nelle prove (la vera e' 420 s)
 
 ME = "agent:sh35cbsy287d"
 CUP = "agent:altra/cup"
