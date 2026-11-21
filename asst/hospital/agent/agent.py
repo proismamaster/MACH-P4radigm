@@ -540,6 +540,30 @@ _GATES: dict[str, _Gate] = {}
 _SENT: OrderedDict[str, _Sent] = OrderedDict()
 
 
+# Ledger writes this process has already made or is making. The confirm turn and the turn of
+# the Ledger's held line both read the case before the other's commit is in it, and both
+# committed the same hold (journeys 069, 099): the second commit was refused and the citizen
+# got a cancel after a valid receipt. A claim is taken before the first await, so only one
+# turn writes hold for a slot, commit for a hold, and the receipt for a booking.
+_CLAIMS: OrderedDict[str, None] = OrderedDict()
+
+
+def _claim(key: str) -> bool:
+    """True for the first turn that asks for ``key``; False if another turn already has it."""
+
+    if key in _CLAIMS:
+        _CLAIMS.move_to_end(key)
+        return False
+    _CLAIMS[key] = None
+    while len(_CLAIMS) > _SENT_NEEDS * 4:
+        _CLAIMS.popitem(last=False)
+    return True
+
+
+def _release(key: str) -> None:
+    _CLAIMS.pop(key, None)
+
+
 def _sent(key: str) -> _Sent:
     entry = _SENT.get(key)
     if entry is None:
@@ -724,6 +748,10 @@ async def _on_confirm(
                     await _say(city, message.sender, " ".join(parts))
                 return
         if not _we(chat, agent, f"slot_id={slot}", to=LEDGER, word="hold"):
+            hold_key = f"hold:{message.need_id}:{slot}"
+            if not _claim(hold_key):
+                # The same confirm in a parallel turn is already holding and committing this slot.
+                return
             parts = ["hold", f"slot_id={slot}"]
             if citizen:
                 parts.append(f"citizen={citizen}")
@@ -731,6 +759,7 @@ async def _on_confirm(
                 parts.append(f"prescription_number={number}")
             parts.append(f"consent_ref={hold_consent}")
             if not await _say(city, LEDGER, " ".join(parts)):
+                _release(hold_key)
                 return
         await _finish_booking(city, message, chat, slot, hold_self=hold_self)
         return
@@ -900,7 +929,11 @@ async def _on_held(city: City, message: Message, chat: list[Message]) -> None:
     ]
     if number:
         parts.append(f"prescription_number={number}")
-    await _say(city, LEDGER, " ".join(parts))
+    commit_key = f"commit:{hold_id}"
+    if not _claim(commit_key):
+        return  # one commit per hold: another turn already sent it
+    if not await _say(city, LEDGER, " ".join(parts)):
+        _release(commit_key)
 
 
 async def _on_committed(city: City, message: Message, chat: list[Message]) -> None:
@@ -919,6 +952,8 @@ async def _on_committed(city: City, message: Message, chat: list[Message]) -> No
         for row in chat:
             if row.sender == city.agent_id and row.text.strip().startswith("hold "):
                 slot = fields_of(row.text).get("slot_id", slot)
+    if slot:
+        _claim(f"booked:{slot}")  # a valid receipt exists: no later cancel for this slot
     sender, _, _ = _booking_of(chat, city.agent_id, slot) if slot else ("", "", None)
     target = sender or _citizen(chat)
     if not target:
@@ -926,6 +961,8 @@ async def _on_committed(city: City, message: Message, chat: list[Message]) -> No
     token = f"booking_id={booking_id}"
     if _we(chat, city.agent_id, token, to=target, word="booking.receipt"):
         return
+    if not _claim(f"receipt:{booking_id}:{target}"):
+        return  # the committed line opened its own turn too: one receipt only
     # Only after a successful commit. offer_id and slot_id let the booking centre match the
     # receipt to the confirm it sent (it compares them when present).
     parts = ["booking.receipt", token, f"ledger_ref={ledger_ref}"]
@@ -978,7 +1015,16 @@ async def _on_refused(
                 slot = fields_of(row.text).get("slot_id", slot)
     if not slot:
         return
+    refused = fields_of(message.text)
+    if "commit" in words(message.text) and (
+        refused.get("code") == "DUPLICATE" or "DUPLICATE" in message.text.split()
+    ):
+        return  # the hold is already committed: the booking stands
     target, _, _ = _booking_of(chat, agent, slot)
+    if f"booked:{slot}" in _CLAIMS or (
+        target and _we(chat, agent, f"slot_id={slot}", to=target, word="booking.receipt")
+    ):
+        return  # never cancel after a valid receipt
     offer_id = _confirmed_offer(chat, agent, slot)
     if not offer_id:
         for row in chat:
