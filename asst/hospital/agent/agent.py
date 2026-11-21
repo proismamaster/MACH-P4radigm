@@ -971,11 +971,21 @@ async def _on_confirm(
     agent = city.agent_id
     fields = fields_of(message.text)
     offer_id = fields.get("offer_id", "")
-    consent = fields.get("consent_ref", "")
+    # MACH-1.x booking centres may send the consent only as cross_asst_consent_ref (or our cross_consent_ref).
+    consent = (fields.get("consent_ref") or fields.get("cross_asst_consent_ref")
+               or fields.get("cross_consent_ref", ""))
     offer = _our_offer(chat, agent, offer_id) if offer_id else {}
     slot = fields.get("slot_id") or offer.get("slot_id", "")
     facility = fields.get("facility") or offer.get("facility", "")
     if not slot or not consent:
+        # Before: a silent return, and the booking centre waited for an answer that never came.
+        is_confirm = first_word(message.text) == "confirm" or message.type == "confirm"
+        if message.sender.startswith("agent:") and is_confirm and offer_id and not _we(
+            chat, agent, f"offer_id={offer_id}", to=message.sender, word="cancel"
+        ):
+            reason = "consent_missing" if slot else "offer_unknown"
+            ids = f"offer_id={offer_id}" + (f" slot_id={slot}" if slot else "")
+            await _say(city, message.sender, f"cancel {ids} reason={reason}")
         return
     citizen = fields.get("citizen") or (
         message.sender if message.sender.startswith("citizen:") else ""
@@ -1922,7 +1932,8 @@ async def _answer_search(
     if service and family and service.split(".", 1)[0] != family:
         await reply(f"cancel request_id={rid} reason=wrong_service service_type={service}")
         return
-    procedure = fields.get("procedure") or ("CONS-GIN" if family == "family_counseling" else "")
+    # Each facility family does one procedure here: a search that names only the service still gets offers.
+    procedure = fields.get("procedure") or {"family_counseling": "CONS-GIN", "hospital": "VIS-FIS"}.get(family, "")
     if not procedure:
         await reply(f"cancel request_id={rid} reason=procedure_missing")
         return

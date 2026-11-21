@@ -1120,6 +1120,41 @@ async def prova_s() -> None:
           len(h.out(LEDGER, "checkin")) == 1 and len(h.out(CIT, "checkin")) == 1, h)
 
 
+async def prova_t() -> None:
+    """Ospedale: confirm e ricerche dei partner in formati che restavano senza risposta.
+
+    (1) MACH: il consenso arriva come `cross_asst_consent_ref` senza `consent_ref`; (2) nessun consenso o
+    un'offerta sconosciuta: l'ospedale usciva in silenzio (il CUP partner aspetta, review -1 per passivita');
+    ora risponde cancel con il motivo. (3) Ricerca hospital.physiatry senza procedure=: l'ospedale fa solo
+    VIS-FIS, quindi offre invece di rispondere procedure_missing."""
+
+    print("Prova T - confirm e ricerche dei partner senza silenzi")
+    me, theirs = "agent:bb01ggxymm05", "agent:h6r1v45esk77"
+    h = Harness("hospital.physiatry", me, World(me))
+    await h.turn(theirs, f"confirm offer_id=of-S-1 slot_id=S-1 citizen={CIT} cross_asst_consent_ref=cons-X facility={me}")
+    holds = h.out(LEDGER, "hold")
+    check("solo cross_asst_consent_ref: hold con quel consenso", len(holds) == 1 and "consent_ref=cons-X" in holds[0].split(), h)
+
+    h = Harness("hospital.physiatry", me, World(me))
+    await h.turn(theirs, f"confirm offer_id=of-S-1 slot_id=S-1 citizen={CIT} facility={me}")
+    back = h.out(theirs, "cancel")
+    check("confirm senza nessun consenso: nessun hold, cancel reason=consent_missing al CUP",
+          not h.out(LEDGER, "hold") and len(back) == 1 and "reason=consent_missing" in back[0].split()
+          and "offer_id=of-S-1" in back[0].split(), h)
+
+    h = Harness("hospital.physiatry", me, World(me))
+    await h.turn(theirs, f"confirm offer_id=of-boh-7 citizen={CIT} consent_ref=cons-N-booking")
+    back = h.out(theirs, "cancel")
+    check("confirm di un'offerta sconosciuta senza slot_id: cancel con offer_id e motivo, nessun hold",
+          not h.out(LEDGER, "hold") and len(back) == 1 and "offer_id=of-boh-7" in back[0].split(), h)
+
+    h = Harness("hospital.physiatry", HOSP, World(HOSP, {"VIS-FIS:1": slots_reply(HOSP, ROWS)}))
+    await h.turn(CUP_EXT, "need.request service_type=hospital.physiatry priority=D request_id=rq-T9")
+    check("ricerca hospital.physiatry senza procedure=: offerte VIS-FIS, non procedure_missing",
+          any("request_id=rq-T9" in t for t in h.out(CUP_EXT, "offer"))
+          and not any("procedure_missing" in t for t in h.out(CUP_EXT)), h)
+
+
 async def run() -> None:
     # Ogni agente ha le sue prove: A, B, D, F, G, I-N e P provano l'ospedale, C e O il consultorio; E e H valgono per tutti.
     if "family_counseling" in os.path.normpath(AGENT_FILE).split(os.sep):
@@ -1141,6 +1176,7 @@ async def run() -> None:
         await prova_q()
         await prova_r()
         await prova_s()
+        await prova_t()
     await prova_e()
     await prova_h()
     print(f"\n{'TUTTO OK' if not FAILS else str(len(FAILS)) + ' FALLITE'}")
