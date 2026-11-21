@@ -1152,6 +1152,10 @@ async def _cup_cross_asst(
             peer.agent_id for peer in peers
             if peer.role == "facility" and service in peer.capabilities and peer.agent_id.startswith("agent:")
         ]
+        _LOG.warning(
+            "cup.find need=%s service=%s peers=%d kept=%d sample=%s", message.need_id, service, len(peers), len(found),
+            [(peer.agent_id, peer.role, list(peer.capabilities)[:3]) for peer in peers[:4]],
+        )
         days = _cup_days(chat, citizen)
         days_field = "/".join(day for day in _AGENDA_WEEKDAYS if day in days)
         language, gender = _lang(chat, citizen), _gender(chat, citizen)
