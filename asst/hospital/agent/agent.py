@@ -1186,7 +1186,12 @@ def _is_search(message: Message, agent: str) -> bool:
     if kind & {"confirm", "cancel", "booking.receipt", "offer", "checkin"}:
         return False
     if message.type == "need.request" or "need.request" in kind:
-        return True
+        # A booking centre's search names what it looks for. The city's conformance probes
+        # (need.request service=lab summary=visit from an agent that exists only in the suite)
+        # name none of these: answering them was an extra effect for the suite and a send to
+        # an unknown agent, so custody.ack, invoke.signature and invoke.idempotency failed.
+        fields = _search_fields(message)
+        return bool(fields.get("request_id") or fields.get("procedure") or fields.get("service_type"))
     fields = fields_of(message.text)
     return bool(fields.get("request_id") and (fields.get("procedure") or fields.get("service_type")))
 
