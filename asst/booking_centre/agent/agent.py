@@ -24,7 +24,10 @@ from time import monotonic
 from city_sdk.city import LEDGER, CapError, City, Message, Need, OutOfScope, clinical, understood
 
 ROLES = ("booking_centre", "gp", "hospital", "specialist_care", "family_counseling")
-_MAX_PAGE = 8
+# The catalogue is read one page at a time until a valid batch turns up: at most 20 pages and about
+# 60 real seconds per need (a valid slot on page 9 was never read when the cap was 8).
+_MAX_PAGE = 20
+_PAGING_SECONDS = 60.0
 # Four agenda hours is about half a minute of real time at 480x, so a slot is still
 # ahead when the citizen decides. One hour was already past by then.
 _LEAD = timedelta(hours=4)
@@ -661,6 +664,7 @@ class _Sent:
 
     __slots__ = (
         "offers", "trigger", "again", "outbox", "uncertain_confirmation", "partner_search_started", "stale_reads",
+        "paging_started",
     )
 
     def __init__(self) -> None:
@@ -672,6 +676,7 @@ class _Sent:
         self.partner_search_started: float | None = None
         # Ledger agenda/slots answers read before a P1 renewal: stale once the renewal is asked.
         self.stale_reads: set[str] = set()
+        self.paging_started: float | None = None
 
 
 # Turns of the same need may overlap. Keep state-changing CUP turns serial and
@@ -1475,7 +1480,12 @@ async def _advance_alone(
     if taken and not replacing:
         return
     missing_page = next((page for page in range(1, page_count + 1) if page not in snapshots), None)
+    if missing_page is not None and sent.paging_started is not None:
+        if monotonic() - sent.paging_started > _PAGING_SECONDS:
+            missing_page = None  # long enough: go on with the pages already read
     if missing_page is not None:
+        if sent.paging_started is None:
+            sent.paging_started = monotonic()
         if not _asked(catalogue_chat, agent, procedure, missing_page):
             await _cup_send(city, message, sent, LEDGER, f"world procedure={procedure} page={missing_page}")
         # A Ledger reply does not open a turn: wait for the page here and go on in this turn,
