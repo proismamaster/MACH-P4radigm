@@ -857,10 +857,46 @@ async def prova_n() -> None:
           not h.out(CUP_OWN, "cancel") and not h.out(CUP_OWN, "hold_refused"), h)
 
 
+def first_word(text: str) -> str:
+    return text.split()[0] if text.split() else ""
+
+
+async def prova_o() -> None:
+    """Consultorio, caso 3290004 (triage 21/11): dopo NO_CAPACITY su uno slot, le nuove offerte al
+    cittadino non devono riproporre lo stesso slot (PROBLEMS, causa 5: 050002 riceveva di nuovo il 10:30).
+    Il rifiuto arriva come riga `refused hold` del Ledger oppure subito dal Relay (CapError)."""
+
+    print("Prova O - consultorio: dopo NO_CAPACITY lo stesso slot non torna nelle offerte")
+    rows = [
+        "slot_id=C-1 doctor_id=D-zz9 facility=ME procedure=CONS-GIN at=2026-11-24T09:00:00+01:00 day=tue free=1",
+        "slot_id=C-2 doctor_id=D-zz9 facility=ME procedure=CONS-GIN at=2026-11-24T10:30:00+01:00 day=tue free=1",
+        "slot_id=C-3 doctor_id=D-zz9 facility=ME procedure=CONS-GIN at=2026-11-25T09:00:00+01:00 day=wed free=1",
+    ]
+    for label, world, port in (
+        ("rifiuto del Ledger (refused hold)", World(FC, {"CONS-GIN:1": slots_reply(FC, rows)}, refuse={"hold": "NO_CAPACITY"}), None),
+        ("rifiuto del Relay (CapError)", World(FC, {"CONS-GIN:1": slots_reply(FC, rows)}), FlakyPort(FC, hold_error="NO_CAPACITY")),
+    ):
+        h = Harness("family_counseling.gynecology", FC, world)
+        if port is not None:
+            h.port = port
+        await h.turn(CIT2, "vorrei una visita ginecologica")
+        first = h.out(CIT2, "offer")
+        oid = next((w.split("=", 1)[1] for t in first for line in t.splitlines() if "slot_id=C-1" in line
+                    for w in line.split() if w.startswith("offer_id=")), "of-C-1")
+        before = len(h.out(CIT2))
+        await h.turn(CIT2, f"confirm offer_id={oid} consent_ref=cons-N-booking")
+        after = h.out(CIT2)[before:]
+        again = [line for t in after for line in t.splitlines() if first_word(line) == "offer"]
+        told = any("cancel" in t.split()[0] for t in after)
+        check(f"{label}: il cittadino sa del rifiuto e C-1 non e' riofferto",
+              told and not any("slot_id=C-1" in line.split() for line in again), h)
+
+
 async def run() -> None:
-    # Ogni agente ha le sue prove: A, B, D, F, G, I-N provano l'ospedale, C il consultorio; E e H valgono per tutti.
+    # Ogni agente ha le sue prove: A, B, D, F, G, I-N provano l'ospedale, C e O il consultorio; E e H valgono per tutti.
     if "family_counseling" in os.path.normpath(AGENT_FILE).split(os.sep):
         await prova_c()
+        await prova_o()
     else:
         await prova_a()
         await prova_b()
