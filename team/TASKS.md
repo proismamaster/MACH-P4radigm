@@ -30,6 +30,7 @@ Livello 5 «Vincoli combinati»: priorità, lingue e disponibilità si sovrappon
 |---|---|---|---|---|
 | CUP L5: vincoli combinati (lingua + genere + giorni + priorità) dentro la finestra; insieme vuoto = alternativa rilassata sui giorni; dopo `consent_declined` offrire un posto della nostra ASST | Abed | `asst/booking_centre/`, `tools/test_cup_*.py` | unito su main | PR #42 · `abed/cup-l5` |
 | Ospedale: doppio commit sullo stesso slot (069, 099: commit, poi ricevuta e annullamento) con la riproduzione del Ledger simulato | Andrei | `asst/hospital/`, `tools/test_facility.py` | unito su main (PR #46 via #60), da pubblicare: online ospedale 1.0.0 | PR #46, #60 · `andrei/hospital-doppio-commit` |
+| Ospedale: conformance 1.0.1 (`custody.ack` renews=[], `invoke.signature` effect, `invoke.idempotency` conflict effect) | Andrei | `asst/hospital/`, `tools/test_facility.py` | causa trovata, test verdi (prova E), da pubblicare | `andrei/hospital-conformance` |
 | Console: ogni 20 minuti tabella dei percorsi falliti e aperti del livello 5 (need_id, agente, causa, testo vero) in `team/PROBLEMS.md` | Sonnet (PC di Ismail) | `team/PROBLEMS.md` | da fare | `sonnet/console-l5` |
 | Deploy, review delle PR, specialist follow-up | Claude (Opus) | `asst/specialist/`, card | in corso | — |
 

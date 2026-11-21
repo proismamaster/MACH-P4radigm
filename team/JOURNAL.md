@@ -1,5 +1,19 @@
 # Journal (la voce più recente in alto)
 
+## 2026-11-21 02:40 — Andrei (Claude) — Ospedale: perché la 1.0.1 non passa la conformance
+
+**Fatto**
+- Letta la suite della città (`city_conform`, nel Python di city-cli): le prove sono `need.request` con corpo `service=lab summary=visit` da `agent:t05/osp-x`, un agente che esiste solo nella suite. La suite conta come effetto ogni messaggio che l'agente *manda* (`sent`), anche se arriva durante la richiesta successiva; `custody.ack` aspetta il rinnovo del lease al massimo 5 s, e l'harness rinnova solo a brain finito.
+- Causa: `_is_search` dell'ospedale prendeva ogni `need.request` da un agente per una ricerca di un CUP e rispondeva `cancel ... reason=procedure_missing` al mittente della prova. Effetto in più → `invoke.signature: effect` e `invoke.idempotency: conflict effect`; invio a un agente inesistente lento → `custody.ack` renews=[] acks=[]. Il consultorio scrive solo al Ledger (non contato in `sent`), per questo passa anche con 1744 righe.
+- Correzione (`asst/hospital/agent/agent.py`, +5 righe): un `need.request` è una ricerca solo se ha `request_id`, `procedure` o `service_type`. Le ricerche vere (nostro CUP, formato del kit) li hanno sempre.
+- Test: prova E in `tools/test_facility.py` (prove della suite con `city_conform.world.good_agent` + Ledger lento 1 s): su `main` 4 controlli falliscono, qui tutti verdi. Prove A, B, D verdi; C fallisce come atteso.
+
+**Problemi**
+- In locale `custody.ack` fallisce anche per l'agente di riferimento del kit: la suite in processo non aspetta il rinnovo. Conferma vera solo con il deploy.
+
+**Prossimo passo**
+- Deploy dell'ospedale (Opus sul PC di Ismail) e `city --json status agent:bb01ggxymm05`.
+
 ## 2026-11-21 01:35 — Andrei (Claude) — Ospedale: un solo commit per hold, nessun cancel dopo la ricevuta
 
 **Fatto**

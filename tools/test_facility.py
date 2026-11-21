@@ -418,11 +418,70 @@ async def prova_d() -> None:
           len(h.out(CUP_OWN, "booking.receipt")) == 1 and not h.out(CUP_OWN, "cancel"), h)
 
 
+async def prova_e() -> None:
+    """Le prove della conformance della città (city_conform, nel Python di city-cli).
+
+    Il mittente delle prove è un agente (`agent:t05/osp-x`) che esiste solo nella suite. Ogni
+    messaggio che l'ospedale gli manda è contato come effetto: se arriva durante la richiesta
+    dopo dà `invoke.signature: effect` o `invoke.idempotency: conflict effect`, e il brain che
+    aspetta la consegna fa scadere i 5 s di `custody.ack` (renews=[] acks=[])."""
+
+    print("Prova E - prove della conformance (custody.ack, invoke.idempotency, invoke.signature)")
+    try:
+        from city_conform.world import good_agent
+    except ImportError:
+        print("  SKIP city_conform non installato: usa il Python di city-cli")
+        return
+    import time
+    os.environ["CITY_CARD"] = os.path.join(os.path.dirname(os.path.dirname(AGENT_FILE)), "card.yaml")
+    spec = importlib.util.spec_from_file_location(f"agent_{uuid4().hex}", AGENT_FILE)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    agent = await good_agent(brain=mod.main, role="facility")
+    probes = (
+        ("need generica (custody.ack, invoke.idempotency)", {"service": "lab", "summary": "visit", "district": 8}),
+        ("need senza distretto (invoke.signature, terminal)", {"service": "lab", "summary": "visit"}),
+        ("emergenza (invoke.semantics)", {"service": "lab", "summary": "alarm", "is_emergency": True, "district": 8}),
+    )
+    for label, body in probes:
+        msg_id = str(uuid4())
+        before = len(agent.sent_log())
+        started = time.perf_counter()
+        await agent.request("POST", "/invoke", agent.need(body=body, msg_id=msg_id))
+        while (msg_id, 1) not in agent.renew_log() and time.perf_counter() - started < 8:
+            await asyncio.sleep(0.01)
+        elapsed = time.perf_counter() - started
+        sent = [(to, b.get("text", "")) for to, b, _ in agent.sent_log()[before:] if to != LEDGER]
+        check(f"{label}: nessun messaggio al mittente della prova (effetto)", not sent)
+        if sent:
+            print(f"        inviato: {sent}")
+        check(f"{label}: brain finito e lease rinnovato entro 2 s ({elapsed:.2f} s)", elapsed < 2)
+    await agent.stop()
+
+    # Ledger lento (1 s per lettura della cronologia): un messaggio generico da un agente
+    # sconosciuto non deve tenere il turno aperto.
+    class SlowPort(Port):
+        async def history(self, *, peer=None, need_id=None):
+            await asyncio.sleep(1.0)
+            return await super().history(peer=peer, need_id=need_id)
+
+    for label, text in (("chat generica", "ciao, siete aperti?"),
+                        ("need.request senza criteri", "need.request summary=visit")):
+        h = Harness("hospital.physiatry", HOSP, World(HOSP))
+        h.port = SlowPort(HOSP)
+        started = time.perf_counter()
+        await asyncio.wait_for(h.turn("agent:t77/sconosciuto", text), timeout=30)
+        elapsed = time.perf_counter() - started
+        check(f"Ledger lento, {label} da agente sconosciuto: turno sotto i 3 s ({elapsed:.2f} s), "
+              f"nessuna risposta", elapsed < 3 and not h.out("agent:t77"), h)
+
+
 async def run() -> None:
     await prova_a()
     await prova_b()
     await prova_c()
     await prova_d()
+    await prova_e()
     print(f"\n{'TUTTO OK' if not FAILS else str(len(FAILS)) + ' FALLITE'}")
     sys.exit(1 if FAILS else 0)
 
