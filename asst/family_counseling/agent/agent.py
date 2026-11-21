@@ -1232,7 +1232,11 @@ def _is_search(message: Message, agent: str) -> bool:
     if kind & {"confirm", "cancel", "booking.receipt", "offer", "checkin"}:
         return False
     if message.type == "need.request" or "need.request" in kind:
-        return True
+        # A booking centre's search names what it looks for. The city's conformance probes
+        # (need.request service=lab summary=visit from an agent that exists only in the suite)
+        # name none of it: waiting for the Ledger on them kept the turn open past custody.ack's 5 s.
+        fields = _search_fields(message)
+        return bool(fields.get("request_id") or fields.get("procedure") or fields.get("service_type"))
     fields = fields_of(message.text)
     return bool(fields.get("request_id") and (fields.get("procedure") or fields.get("service_type")))
 

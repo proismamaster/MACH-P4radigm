@@ -480,10 +480,13 @@ async def prova_e() -> None:
 
 
 async def run() -> None:
-    await prova_a()
-    await prova_b()
-    await prova_c()
-    await prova_d()
+    # Ogni agente ha le sue prove: A, B e D provano l'ospedale, C il consultorio; E vale per tutti.
+    if "family_counseling" in os.path.normpath(AGENT_FILE).split(os.sep):
+        await prova_c()
+    else:
+        await prova_a()
+        await prova_b()
+        await prova_d()
     await prova_e()
     print(f"\n{'TUTTO OK' if not FAILS else str(len(FAILS)) + ' FALLITE'}")
     sys.exit(1 if FAILS else 0)

@@ -136,6 +136,10 @@ async def sospetti_bloccati() -> None:
     await h.turn(IMPOSTOR, "data.request purpose=booking fields=address " + INJECTIONS[0])
     check("data.request con istruzioni: nessun indirizzo rivelato", not mine(h), h)
     h = harness()
+    await h.turn(IMPOSTOR, "need.request service=lab summary=visit")
+    check("need.request senza criteri (come le prove della conformance): nessun effetto, "
+          "nemmeno una domanda al Ledger", not mine(h), h)
+    h = harness()
     await h.turn(CUP, search("rq-S3", f"facility={OTHER}"))
     check("chi e' nel ring o in city.find non viene bloccato, nemmeno con facility= altrui",
           bool(h.out(CUP, "offer")), h)
