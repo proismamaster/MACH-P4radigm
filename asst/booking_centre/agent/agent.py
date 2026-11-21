@@ -76,7 +76,7 @@ _CUP_SERVICES = {
     "CTRL-CARD": "specialist_care.cardiology",
 }
 _CUP_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}")
-_CUP_MAX_PARTNERS = 12
+_CUP_MAX_PARTNERS = 30  # 26 ASST in the ring (MACH-1.2): the six known ones replied no_availability
 # Level 4: facilities other teams published on the event Discord (21/11, 00:00-00:40), with the
 # rare language of their h3. city.find alone did not bring partner offers (journeys 153, 165, 166:
 # answer set not empty, no partner slot). Only search criteria travel before the cross_asst consent.
@@ -88,6 +88,10 @@ _CUP_RING = (
     ("si", "agent:xtj1dk9x3qej", "agent:q18es2d82f8r"),  # Greco
     ("fr", "agent:x0vr9rbwpesr", "agent:h8425ac7btd8"),  # Corvetto
     ("", "agent:tmt0bcv0st1f", "agent:n9bf9y6670hp"),    # Lorenteggio
+    # Added from the MACH-1.2 ring list (01:23): the six above all replied no_availability.
+    ("ro", "agent:s1twcdzg3296", "agent:f2s88vwd3jnf"),  # Precotto / Toros
+    ("", "agent:gxq3vzgt3h5t", "agent:tty8erdj6t41"),    # Bovisa
+    ("tl", "", "agent:etpwrfmfa8hm"),                    # Isola (hospital id not published)
 )
 _CUP_RING_COLUMN = {"hospital.physiatry": 1, "specialist_care.cardiology": 2}
 
@@ -97,7 +101,7 @@ def _cup_partner_candidates(found: list[str], service: str, local: set[str], lan
     then whatever city.find returned; never our own facilities."""
     column = _CUP_RING_COLUMN.get(service)
     ring = [] if column is None else sorted(_CUP_RING, key=lambda row: row[0] != language)
-    known = [row[column] for row in ring]
+    known = [row[column] for row in ring if row[column]]
     ordered = dict.fromkeys([*known, *found])
     return [agent for agent in ordered if agent not in local and _CUP_TOKEN.fullmatch(agent)][:_CUP_MAX_PARTNERS]
 
