@@ -68,6 +68,13 @@ Causa 2 chiarita da Opus: `city.find` dà `role=hospital` e il CUP filtrava `rol
 
 Non ancora iniziato: i livelli dei percorsi in console sono 1-5 (3, 44, 84, 54, 15). Scansione dei percorsi `booked`/`done` recenti: 11 letti (livelli 3, 4, 5), tutti con ricevuta e nessun `cancel` dopo; nessun `fault.cancel` né `facility_cancelled` dopo una ricevuta. Il prossimo giro (alle :27 e :47) cerca `facility_cancelled` e `fault.cancel` dopo `booking.receipt` e se il CUP riprenota entro la scadenza.
 
+### Giro delle 02:18 locali (01:18 UTC)
+
+- **Percorsi aggiornati negli ultimi 25 minuti** (stato in console): 1 `booked`, 4 `done`, 20 `failed`, 44 `open`. In 25 minuti hanno concluso la prenotazione 5 percorsi, 20 sono falliti e 44 aspettano. Il taglio per `need` nato dopo le 01:50 locali (00:50 UTC) è parziale: 24 dettagli letti su 69, 8 nati dopo il taglio (tutti `open` al momento della lettura). Il conteggio completo arriva con i giri successivi (cache dei dettagli già letti).
+- **Specialist 1.0.3**: `message_count` 183 (era 21 alle 00:00 locali). I suoi log non scrivono le `need.request` (query `need.request` e `rq-` senza risultati sul log dello specialist), quindi cosa risponde ai CUP delle altre ASST non si vede dalla console. Da confrontare il `message_count` nei giri successivi.
+- **Livello 6**: ancora nessun `facility_cancelled` o `fault.cancel` dopo una ricevuta nei percorsi letti.
+- **Ipotesi per Opus, non verificata**: `open` 26 → 33 → 52 (00:30, 00:54, 01:10 UTC) con i `done` quasi fermi fa pensare a una coda al CUP (ogni ricerca aspetta 25 partner). Da misurare: tempo fra la `need.request` e la prima risposta del CUP nei percorsi nuovi.
+
 ## Percorsi falliti e aperti (console, 20/11 23:50)
 
 135 percorsi: 74 done, 25 escalated, 13 failed, 14 open, 3 booked. Dati da `/v1/team/journeys/<need_id>` (messaggi, verdetto, review), `/v1/team/world` (registry e slot veri), `/v1/team/deployments` (esito dei deploy). **Gli orari della console sono UTC: ora locale = UTC+1** (21:52 nella console = 22:52 da noi).
