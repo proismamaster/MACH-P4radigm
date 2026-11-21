@@ -350,13 +350,15 @@ def fitting(
     gender: str | None = None,
     facility: str | None = None,
     procedure: str | None = None,
+    days: set[str] | None = None,
+    relax_window: bool = False,
 ) -> list[dict[str, str]]:
-    """Slots a citizen can accept: future, free, in the priority window, spoken language."""
+    """Available slots that satisfy the citizen's preferences and the prescribed priority."""
 
-    if priority == "U":
-        horizon: datetime | None = now.replace(hour=23, minute=59, second=59, microsecond=0)
-    elif priority == "P":
-        horizon = None
+    if relax_window or priority == "P":
+        horizon: datetime | None = None
+    elif priority == "U":
+        horizon = now.replace(hour=23, minute=59, second=59, microsecond=0)
     else:
         horizon = now + timedelta(days=_DEADLINE_DAYS.get(priority or "", 14))
     earliest = now + _LEAD
@@ -365,15 +367,21 @@ def fitting(
         slot = fields_of(line)
         slot_id = slot.get("slot_id")
         doctor = slot.get("doctor_id")
-        at = _when(slot.get("at", ""))
+        timestamp = slot.get("agenda_date") or slot.get("at", "")
+        at = _when(timestamp)
         if not slot_id or not doctor or at is None:
             continue
+        day = _AGENDA_WEEKDAYS[at.weekday()]
+        stated_day = slot.get("agenda_day") or slot.get("day") or day
+        if day not in _AGENDA_DAYS or stated_day.lower() != day or (days and day not in days):
+            continue
+        slot["at"], slot["day"] = timestamp, day
         if procedure and slot.get("procedure") not in (None, procedure):
             continue
         if facility and slot.get("facility") != facility:
             continue
-        free = slot.get("free")
-        if free is not None and free.isdigit() and int(free) <= 0:
+        free = slot.get("free", slot.get("capacity", "1"))
+        if not free.isdecimal() or int(free) <= 0:
             continue
         reserve = slot.get("urgent_reserve", "").lower() == "true"
         if reserve and priority != "U":
@@ -387,8 +395,7 @@ def fitting(
             if _unknown_doctor_ok(lang, gender):
                 chosen.append((at, slot))
             continue
-        day = slot.get("day", "")
-        if day and day not in spec[2]:
+        if day not in spec[2]:
             continue
         if gender and spec[1] != gender:
             continue
@@ -514,22 +521,23 @@ def _cup_prescription(chat: list[Message], number: str | None, citizen: str) -> 
     return None
 
 
-def _lang(chat: list[Message]) -> str:
-    for row in chat:
-        if row.sender.startswith("citizen:"):
-            lang = fields_of(row.text).get("lang", "")
-            if lang:
-                return lang
+def _lang(chat: list[Message], citizen: str) -> str:
+    for row in reversed(chat):
+        if row.sender == citizen:
+            lang = row.body.get("lang") or fields_of(row.text).get("lang")
+            if isinstance(lang, str) and _CUP_TOKEN.fullmatch(lang):
+                return lang.lower()
     return "it"
 
 
-def _gender(chat: list[Message]) -> str | None:
-    for row in chat:
-        if not row.sender.startswith("citizen:"):
+def _gender(chat: list[Message], citizen: str) -> str | None:
+    for row in reversed(chat):
+        if row.sender != citizen:
             continue
-        raw = fields_of(row.text).get("gender_preference") or fields_of(row.text).get("gender")
-        if raw in {"m", "f"}:
-            return raw
+        fields = fields_of(row.text) if row.type == "chat" else row.body
+        raw = fields.get("gender_preference") or fields.get("gender")
+        if isinstance(raw, str) and raw.lower() in {"m", "f"}:
+            return raw.lower()
     return None
 
 
@@ -650,6 +658,7 @@ class _CupCase:
     offers: dict[str, dict[str, str]] = field(default_factory=dict)
     declined_slots: set[str] = field(default_factory=set)
     cross_consent_request: Message | None = None
+    cross_asst_declined: bool = False
     confirmation: Message | None = None
     cancellation: Message | None = None
     renewal_request: Message | None = None
@@ -672,6 +681,9 @@ def _cup_case(chat: list[Message], agent: str, citizen: str) -> _CupCase:
                     state.cross_consent_request = None
                 if not state.offers:
                     state.cancellation = row
+            elif state.cross_consent_request is not None and state.confirmation is None:
+                _, refused = _cup_cross_reply(row, state.cross_consent_request, act, fields)
+                state.cross_asst_declined |= refused
             continue
         if row.sender != agent:
             continue
@@ -693,6 +705,8 @@ def _cup_case(chat: list[Message], agent: str, citizen: str) -> _CupCase:
                 state.cross_consent_request = None
                 state.confirmation = None
                 state.cancellation = row
+                if fields.get("reason") == "consent_declined":
+                    state.cross_asst_declined = True
             elif act == "data.request" and fields.get("purpose") == "prescription_renewal":
                 if number := fields.get("prescription_number"):
                     state.expired_prescriptions.add(number)
@@ -872,6 +886,8 @@ async def _cup_confirm(
     if any(key in fields and fields[key] != value for key, value in expected.items()):
         return
     partner_id = offer.get("partner_offer_id")
+    if partner_id and state.cross_asst_declined:
+        return
     if partner_id and not cross_ref:
         await _cup_send(
             city, message, cache, citizen,
@@ -903,6 +919,29 @@ async def _cup_confirm(
         cache.uncertain_confirmation = False
 
 
+def _cup_cross_reply(
+    message: Message,
+    ask: Message,
+    act: str,
+    fields: dict[str, str],
+) -> tuple[str, bool]:
+    """Return the consent reference or whether the citizen declined this invitation."""
+    offer_id = fields_of(ask.text).get("offer_id", "")
+    if fields.get("offer_id", offer_id) != offer_id:
+        return "", False
+    if act in {"", "confirm", "need.request"} or (act == "cancel" and "offer_id" in fields):
+        return "", False  # Booking requests, confirmations and slot declines are separate from consent.
+    if fields.get("purpose") not in (None, "cross_asst"):
+        return "", False
+    received_at, asked_at = _when(message.sent_at), _when(ask.sent_at)
+    if received_at and asked_at and received_at < asked_at:
+        return "", False
+    reference = fields.get("consent_ref", "")
+    if act in {"consent", "data.response"} and fields.get("purpose") == "cross_asst" and _CUP_TOKEN.fullmatch(reference):
+        return reference, False
+    return "", act not in {"consent", "data.response"} or not reference
+
+
 async def _cup_cross_consent(
     city: City,
     message: Message,
@@ -916,22 +955,16 @@ async def _cup_cross_consent(
     ask = state.cross_consent_request
     assert ask is not None
     offer_id = fields_of(ask.text).get("offer_id", "")
-    if offer_id not in state.offers or fields.get("offer_id", offer_id) != offer_id:
+    if offer_id not in state.offers:
         return
-    if act in {"", "confirm"} or (act == "cancel" and "offer_id" in fields):
-        return  # Booking confirmations and slot declines are separate from consent.
-    if fields.get("purpose") not in (None, "cross_asst"):
-        return
-    received_at, asked_at = _when(message.sent_at), _when(ask.sent_at)
-    if received_at and asked_at and received_at < asked_at:
-        return
-    reference = fields.get("consent_ref", "")
-    if act in {"consent", "data.response"} and fields.get("purpose") == "cross_asst" and _CUP_TOKEN.fullmatch(reference):
+    reference, refused = _cup_cross_reply(message, ask, act, fields)
+    if reference:
         await _cup_confirm(city, message, chat, cache, state, citizen, {"offer_id": offer_id}, cross_ref=reference)
-    elif act not in {"consent", "data.response"} or not reference:
-        await _cup_send(
-            city, message, cache, citizen,
-            f"cancel offer_id={offer_id} reason=consent_declined Non ho condiviso i tuoi dati con l'altra ASST.",
+    elif refused:
+        await _cup_cancel(
+            city, message, chat, cache, citizen,
+            f"cancel offer_id={offer_id} reason=consent_declined I tuoi dati restano nella nostra ASST. "
+            "Cerco qui un altro orario.",
         )
 
 
@@ -1014,7 +1047,7 @@ def _cup_partner_slots(
 ) -> tuple[list[dict[str, str]], set[str]]:
     slots: dict[tuple[str, str], dict[str, str]] = {}
     answered = set()
-    days, language, gender = _cup_days(chat, citizen), _lang(chat), _gender(chat)
+    days, language, gender = _cup_days(chat, citizen), _lang(chat, citizen), _gender(chat, citizen)
     if priority == "U":
         horizon = now.replace(hour=23, minute=59, second=59, microsecond=0)
     else:
@@ -1056,7 +1089,8 @@ def _cup_partner_slots(
             free = fields.get("free", "1")
             if not free.isdecimal() or int(free) <= 0:
                 continue
-            if fields.get("urgent_reserve", "").lower() == "true" and priority != "U":
+            reserved = fields.get("urgent_reserve", "").lower() == "true" or fields.get("reserve", "").upper() == "U"
+            if reserved and priority != "U":
                 continue
             at = _when(fields.get("agenda_date", ""))
             # The level-4 common format (agreed between teams) omits expiry and agenda_day:
@@ -1074,8 +1108,8 @@ def _cup_partner_slots(
             # The table stays authoritative for gender, days and every language it names; the
             # partner's doctor_lang only fills the table's "*" (or an unknown doctor).
             spec = _doctor_spec(doctor)
-            stated = set(re.split(r"[/,+]", fields.get("doctor_lang", ""))) - {"", "*"}
-            stated_sex = fields.get("doctor_gender")
+            stated = set(re.split(r"[/,+]", fields.get("doctor_lang", "").lower())) - {"", "*"}
+            stated_sex = fields.get("doctor_gender", "").lower() or None
             if stated_sex not in {None, "m", "f"}:
                 continue
             if spec is not None:
@@ -1116,12 +1150,13 @@ async def _cup_cross_asst(
         ]
         days = _cup_days(chat, citizen)
         days_field = "/".join(day for day in _AGENDA_WEEKDAYS if day in days)
-        for partner in _cup_partner_candidates(found, service, local, _lang(chat)):
+        language, gender = _lang(chat, citizen), _gender(chat, citizen)
+        for partner in _cup_partner_candidates(found, service, local, language):
             request_id = f"rq-{token_hex(8)}"
             search = f"need.request service_type={service} procedure={procedure} priority={priority} request_id={request_id}"
-            if (language := _lang(chat)) not in {"it", ""}:
+            if language != "it":
                 search += f" lang={language}"
-            if gender := _gender(chat):
+            if gender:
                 search += f" gender_preference={gender}"
             if days_field:
                 search += f" days={days_field}"
@@ -1168,13 +1203,13 @@ async def _cup_cross_asst(
 
 def _cup_relaxed(
     lines: list[str], *, now: datetime, lang: str, gender: str | None, procedure: str,
+    priority: str | None = None,
 ) -> list[dict[str, str]]:
-    """Empty answer set: the nearest slots with one constraint relaxed (rules: offer a relaxed
-    alternative, do not book outside S on our own). First the time window (same language and
-    gender, any later day), then the language (an Italian-speaking doctor)."""
-    # Only the time window is relaxed: a doctor who does not speak the citizen's language was
-    # declined every time (172), so the language is never given up.
-    return fitting(lines, now=now, priority="P", lang=lang, gender=gender, procedure=procedure)
+    """Try other weekdays within the priority window, then widen only the window."""
+    within_window = fitting(lines, now=now, priority=priority, lang=lang, gender=gender, procedure=procedure)
+    return within_window or fitting(
+        lines, now=now, priority=priority, lang=lang, gender=gender, procedure=procedure, relax_window=True,
+    )
 
 
 async def _cup_offer_batch(
@@ -1304,51 +1339,58 @@ async def _advance_alone(
         taken = _withdrawn(chat, agent) | case.declined_slots | sent.again
     else:
         taken = _offered(chat, agent) | sent.offers
-    chosen = [
-        slot
-        for slot in fitting(
-            [line for line in world.splitlines() if "slot_id=" in line],
-            now=now,
-            priority=priority,
-            lang=_lang(chat),
-            gender=_gender(chat),
-            procedure=procedure,
-        )
-        if slot.get("slot_id") not in taken
-    ]
-    days = _cup_days(chat, citizen)
     unavailable = {
         fields_of(row.text).get("facility")
         for row in chat
         if row.sender == agent and first_word(row.text) == "cancel"
         and "reason=facility_unavailable" in row.text.split()
     }
-    chosen = [
-        slot for slot in chosen
-        if slot.get("facility", "").startswith("agent:") and slot["facility"] != agent
-        and slot["facility"] not in unavailable
-        and (not days or slot.get("day") in days)
+    catalogue_chat = fresh(chat)
+    page_count = min(_page(world)[1], _MAX_PAGE)
+    snapshots: dict[int, str] = {}
+    for row in catalogue_chat:
+        if row.sender == LEDGER and first_word(row.text) == "slots":
+            page = _page(row.text)[0]
+            if 1 <= page <= page_count:
+                # A newer page replaces the whole previous page, including slots now absent.
+                snapshots.pop(page, None)
+                snapshots[page] = row.text
+    catalogue = {}
+    for snapshot in snapshots.values():
+        for line in snapshot.splitlines():
+            fields = fields_of(line)
+            if slot_id := fields.get("slot_id"):
+                catalogue[slot_id] = (line, fields.get("facility", ""))
+    lines = [
+        line for slot_id, (line, facility) in catalogue.items()
+        if slot_id not in taken and facility.startswith("agent:") and facility != agent and facility not in unavailable
     ]
+    language, gender = _lang(chat, citizen), _gender(chat, citizen)
+    chosen = fitting(
+        lines, now=now, priority=priority, lang=language, gender=gender, procedure=procedure,
+        days=_cup_days(chat, citizen),
+    )
     if chosen:
         await _cup_offer_batch(city, message, sent, citizen, chosen, number, priority, replacing=replacing)
         return
     if taken and not replacing:
         return
-    page, pages = _page(world)
-    if page < pages and page < _MAX_PAGE:
-        if not _asked(fresh(chat), agent, procedure, page + 1):
-            await _cup_send(city, message, sent, LEDGER, f"world procedure={procedure} page={page + 1}")
+    missing_page = next((page for page in range(1, page_count + 1) if page not in snapshots), None)
+    if missing_page is not None:
+        if not _asked(catalogue_chat, agent, procedure, missing_page):
+            await _cup_send(city, message, sent, LEDGER, f"world procedure={procedure} page={missing_page}")
         return
     if number and procedure in _CUP_SERVICES and priority in {"U", "B", "D"}:
-        relaxed = [
-            slot
-            for slot in _cup_relaxed(
-                [line for line in world.splitlines() if "slot_id=" in line],
-                now=now, lang=_lang(chat), gender=_gender(chat), procedure=procedure,
-            )
-            if slot.get("slot_id") not in taken and slot.get("facility", "").startswith("agent:")
-            and slot["facility"] != agent and slot["facility"] not in unavailable
-        ]
+        relaxed = _cup_relaxed(
+            lines, now=now, lang=language, gender=gender, procedure=procedure, priority=priority,
+        )
+        if case.cross_asst_declined:
+            if relaxed:
+                await _cup_offer_batch(
+                    city, message, sent, citizen, relaxed, number, priority, replacing=replacing,
+                    note="Questi orari della nostra ASST richiedono flessibilità sui giorni o sulla scadenza.",
+                )
+            return
         await _cup_cross_asst(
             city, message, chat, sent, citizen, procedure, priority, now, number, taken,
             replacing=replacing, relaxed=relaxed,
