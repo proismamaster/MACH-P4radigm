@@ -1766,6 +1766,65 @@ def _our_doctor(doctor_id: str) -> tuple[str, str] | None:
     return _OUR_DOCTORS.get(doctor_id) or _OUR_DOCTORS.get(f"asst-bicocca-{doctor_id.rsplit('-', 1)[-1]}")
 
 
+# MACH-1.2 search criteria. after= and before= are the local (Milan) time of the slot, after <= time < before;
+# the agenda runs in November-December, when Milan is UTC+1. The language is never relaxed (a doctor who
+# does not speak it is no alternative); the hospital is accessible, so wheelchair=true changes nothing.
+_RELAXABLE = ("days", "after", "before", "gender_preference")
+_MILAN = timezone(timedelta(hours=1))
+_DAY_NAMES = {
+    "mon": "mon", "tue": "tue", "wed": "wed", "thu": "thu", "fri": "fri", "sat": "sat", "sun": "sun",
+    "lun": "mon", "mar": "tue", "mer": "wed", "gio": "thu", "ven": "fri", "sab": "sat", "dom": "sun",
+}
+_GENDERS = {"f": "f", "female": "f", "donna": "f", "femmina": "f", "m": "m", "male": "m", "uomo": "m", "maschio": "m"}
+_WEEK = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+def _clock(value: str) -> int | None:
+    """Minutes after midnight for HH:MM (or HH), else None."""
+    hours, _, minutes = value.strip().partition(":")
+    if not hours.isdigit() or (minutes and not minutes.isdigit()):
+        return None
+    total = int(hours) * 60 + int(minutes or 0)
+    return total if 0 <= total <= 24 * 60 else None
+
+
+def _criteria(fields: dict[str, str]) -> dict[str, object]:
+    days = {
+        _DAY_NAMES[part.strip().lower()[:3]]
+        for part in re.split(r"[/,;|+ ]", fields.get("days", ""))
+        if part.strip().lower()[:3] in _DAY_NAMES
+    }
+    gender = (fields.get("gender_preference") or fields.get("gender") or "").strip().lower()
+    after, before = fields.get("after", ""), fields.get("before", "")
+    return {
+        "lang": fields.get("lang", "").strip().lower(),
+        "gender": _GENDERS.get(gender, ""),
+        "days": days,
+        "after": None if "T" in after else _clock(after),  # a date-time after= is the MACH-1.3 window
+        "before": None if "T" in before else _clock(before),
+    }
+
+
+def _misses(slot: dict[str, str], want: dict[str, object]) -> list[str]:
+    """The criteria ``slot`` does not meet: lang, gender_preference, days, after, before."""
+    out: list[str] = []
+    if not _doctor_fits(slot, str(want["lang"]), ""):
+        out.append("lang")
+    if want["gender"] and not _doctor_fits(slot, "", str(want["gender"])):
+        out.append("gender_preference")
+    at = _when(slot.get("at", "") or slot.get("agenda_date", ""))
+    local = at.astimezone(_MILAN) if at is not None else None
+    day = (slot.get("day") or slot.get("agenda_day") or (_WEEK[local.weekday()] if local else "")).lower()
+    if want["days"] and day[:3] not in want["days"]:
+        out.append("days")
+    minute = local.hour * 60 + local.minute if local else None
+    if minute is not None and want["after"] is not None and minute < want["after"]:
+        out.append("after")
+    if minute is not None and want["before"] is not None and minute >= want["before"]:
+        out.append("before")
+    return out
+
+
 def _doctor_fits(slot: dict[str, str], lang: str, gender: str) -> bool:
     known = _our_doctor(slot.get("doctor_id", ""))
     if known is None:
@@ -1900,14 +1959,21 @@ async def _answer_search(
     )
     gone = _gone()  # held by another case, booked or past, as far as this process knows
     slots = [slot for slot in slots if slot.get("slot_id") not in gone]
-    want_lang = fields.get("lang", "").lower()
-    want_gender = fields.get("gender_preference") or fields.get("gender") or ""
-    want_gender = want_gender if want_gender in {"m", "f"} else ""
-    slots = [slot for slot in slots if _doctor_fits(slot, want_lang, want_gender)]
+    want = _criteria(fields)
+    # MACH-1.2: an offer meets every criterion of the citizen; with none, the alternatives that miss one
+    # relaxable criterion go under the cancel (the citizen of the other ASST refuses the rest anyway).
+    misses = {slot["slot_id"]: _misses(slot, want) for slot in slots}
+    near = [slot for slot in slots if len(misses[slot["slot_id"]]) == 1 and misses[slot["slot_id"]][0] in _RELAXABLE]
+    slots = [slot for slot in slots if not misses[slot["slot_id"]]]
     # MACH-1.3: the asker's window with date and time; a slot outside it would be refused.
     earliest, deadline = _stamp(fields.get("earliest", "") or fields.get("after", "")), _stamp(fields.get("deadline", ""))
     slots = [
         slot for slot in slots
+        if (at := _when(slot.get("at", "") or slot.get("agenda_date", ""))) is None
+        or ((earliest is None or at >= earliest) and (deadline is None or at <= deadline))
+    ]
+    near = [
+        slot for slot in near
         if (at := _when(slot.get("at", "") or slot.get("agenda_date", ""))) is None
         or ((earliest is None or at >= earliest) and (deadline is None or at <= deadline))
     ]
@@ -1924,8 +1990,13 @@ async def _answer_search(
         if not _asked(chat, agent, procedure, page + 1):
             await _say(city, LEDGER, f"world procedure={procedure} page={page + 1}")
         return
-    reason = "reserved_u" if reserved else "no_availability"  # MACH-1.2/1.3 code
-    await reply(f"cancel request_id={rid} reason={reason} procedure={procedure}")
+    reason = "reserved_u" if reserved and not near else "no_availability"  # MACH-1.2/1.3 code
+    lines = [f"cancel request_id={rid} reason={reason} procedure={procedure}"]
+    for slot in near[:3]:
+        line = f"{_partner_offer(slot, agent, priority, rid)} relaxed={misses[slot['slot_id']][0]}"
+        if len("\n".join([*lines, line])) <= _MAX_TEXT:
+            lines.append(line)
+    await reply("\n".join(lines))
 
 
 # --- level 6: rebooking after a cancelled booking (from the consultorio) ---------------------------
