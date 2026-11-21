@@ -1,5 +1,18 @@
 # Journal (la voce più recente in alto)
 
+## 2026-11-21 02:45 — Andrei (Claude) — Ospedale: la causa vera di custody.ack
+
+**Fatto**
+- Dopo #67 la conformance falliva ancora. Causa: `main()` chiama `city.history(need_id=message.need_id)` anche senza need_id; le prove della suite non ne hanno, e senza need_id l'SDK legge TUTTA la casella (fino a 5 pagine firmate da 200, una dopo l'altra, `city_sdk/http.py`). L'ospedale ha ~1400 messaggi: il turno dura secondi e `custody.ack` smette di aspettare il rinnovo dopo 5 s.
+- GP e CUP escono prima della lettura se manca need_id (per questo passano sempre); consultorio e specialist leggono tutta la casella ma è piccola (1 pagina). Non c'entra la dimensione del file.
+- Correzione: `if not message.need_id: return` prima di `history`, come GP e CUP. Test: prova H (casella che costa 3 s letta senza need_id): fallisce su `main`, verde qui. A, B, D, E, H verdi; C come atteso; test_fix verde; card valida.
+
+**Problemi**
+- Consultorio e specialist hanno lo stesso schema: passeranno sempre meno con la casella che cresce. Avvisati Hapca e Ismail.
+
+**Prossimo passo**
+- Deploy della 1.0.1 con questa correzione (Opus), poi la PR #70 (livelli 6-8).
+
 ## 2026-11-21 03:00 — Ismail (Opus) — Livelli 5-6: city.find, orologio, pagine, riprenotazione
 
 **Fatto (online)**
