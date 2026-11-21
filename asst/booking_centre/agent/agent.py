@@ -333,6 +333,19 @@ async def _until(
 _AGENDA_RATE = 60  # agenda minutes per real minute (/v1/team/wave "rate")
 
 
+def _agenda_add(start: datetime, delta: timedelta) -> datetime:
+    """``start`` plus ``delta`` of agenda time. The agenda has no weekend: Saturday and Sunday are
+    skipped, so Friday 23:00 plus two hours is Monday 01:00."""
+    out = start
+    while delta > timedelta(0):
+        midnight = (out + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        step = min(delta, midnight - out)
+        out, delta = out + step, delta - step
+        if out.weekday() >= 5:
+            out += timedelta(days=7 - out.weekday())
+    return out
+
+
 def _agenda_now(chat: list[Message], real_now: datetime | None = None) -> datetime | None:
     """The agenda clock now: the Ledger's last agenda_now plus the real time since that reply.
 
@@ -350,7 +363,7 @@ def _agenda_now(chat: list[Message], real_now: datetime | None = None) -> dateti
     if read is None:
         return at
     elapsed = (real_now or datetime.now(timezone.utc)) - read
-    return at + max(elapsed, timedelta(0)) * _AGENDA_RATE
+    return _agenda_add(at, max(elapsed, timedelta(0)) * _AGENDA_RATE)
 
 
 def _has_agenda(chat: list[Message]) -> bool:
