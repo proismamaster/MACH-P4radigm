@@ -574,15 +574,20 @@ _RX_STEP = 1.0
 
 
 async def _gp_wait_rx(city: City, need_id: str | None, chat: list[Message], number: str) -> list[Message]:
-    fresh = chat
-    for attempt in range(max(1, int(_RX_WAIT / _RX_STEP))):
+    """Bounded by real time (a slow history read must not stretch the turn) and by 3 errors in a row."""
+    fresh, errors, started, first = chat, 0, monotonic(), True
+    while first or monotonic() - started < _RX_WAIT:
+        first = False
         try:
             fresh = await city.history(need_id=need_id)
+            errors = 0
         except CapError:
-            fresh = fresh or chat
+            errors += 1
+            if errors >= 3:
+                break
         if _gp_ledger_rx(fresh, number, heads={"prescribed", "refused"}) is not None:
             return fresh
-        await asyncio.sleep(_RX_STEP if attempt else _PULL_PAUSE)
+        await asyncio.sleep(_RX_STEP)
     _LOG.warning("gp.prescribed.late need=%s rx=%s", need_id, number[-8:])
     return fresh
 

@@ -30,7 +30,7 @@ async def scenario(late_after):
     h.mod._PULL_PAUSE = 0
     h.mod._PULL_TRIES = 24  # the real value: the harness sets 1 to skip waits
     if hasattr(h.mod, "_RX_STEP"):
-        h.mod._RX_WAIT, h.mod._RX_STEP = 0.2, 0.001  # the real 90 s wait, scaled down
+        h.mod._RX_WAIT, h.mod._RX_STEP = 5.0, 0.001  # the real 90 s wait, scaled down (Windows sleeps ~15 ms)
     world = h.world
     h.world.answer = lambda text: None if text.startswith("prescribe") else tfix.World.answer(world, text)
     reads = {"n": 0}
