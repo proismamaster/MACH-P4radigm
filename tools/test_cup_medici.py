@@ -167,5 +167,11 @@ check("omette days se il cittadino non indica giorni",
       bool(messages) and all("days" not in fields for fields in messages))
 
 
+print("CUP - h3 della nostra ASST parla solo it/ti (142: lang=hi)")
+H3 = f"slot_id=S-3 doctor_id=asst-bicocca-h3 facility=agent:p/hosp procedure=VIS-FIS at={AT} day=tue free=1"
+check("h3 per chi parla hindi: scartato", cup.fitting([H3], now=NOW, priority="B", lang="hi") == [])
+check("h3 per chi parla tigrino: tenuto", len(cup.fitting([H3], now=NOW, priority="B", lang="ti")) == 1)
+check("alternativa rilassata per hindi: mai l'h3", cup._cup_relaxed([H3], now=NOW, lang="hi", gender=None, procedure="VIS-FIS") == [])
+
 print("FALLITE:", FAILS if FAILS else "nessuna")
 sys.exit(1 if FAILS else 0)
