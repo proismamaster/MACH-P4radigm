@@ -145,7 +145,7 @@ def _cup_partner_candidates(found: list[str], service: str, local: set[str], lan
     ordered = dict.fromkeys([*speaker, *learned, *productive, *found, *known])
     return [agent for agent in ordered if agent not in local and _CUP_TOKEN.fullmatch(agent)][:_CUP_MAX_PARTNERS]
 
-_CUP_PARTNER_REPLY_SECONDS = 20
+_CUP_PARTNER_REPLY_SECONDS = 15
 _CUP_CONFIRM_WAIT = 180  # real seconds without receipt or cancel from the facility
 
 
@@ -344,20 +344,31 @@ async def _until(
     ready: Callable[[list[Message]], bool],
     *,
     max_polls: int | None = None,
+    timeout: float | None = None,
 ) -> list[Message]:
     """Re-read the case until ``ready`` or the short wait ends. The push may never arrive."""
 
     fresh = chat
     polls = _PULL_TRIES if max_polls is None else min(max_polls, _PULL_TRIES)
+    clock = asyncio.get_running_loop().time
+    deadline = None if timeout is None else clock() + timeout
     for attempt in range(polls):
+        if deadline is not None and clock() >= deadline:
+            break
         try:
-            fresh = await city.history(need_id=need_id)
+            async with asyncio.timeout_at(deadline):
+                fresh = await city.history(need_id=need_id)
+        except TimeoutError:
+            if deadline is None:
+                raise
+            break  # The initial collection closes with its last successful read.
         except CapError:
             fresh = chat
         if ready(fresh):
             return fresh
         if attempt + 1 < polls:
-            await asyncio.sleep(_PULL_PAUSE)
+            pause = _PULL_PAUSE if deadline is None else min(_PULL_PAUSE, max(0.0, deadline - clock()))
+            await asyncio.sleep(pause)
     return fresh
 
 
@@ -1474,9 +1485,9 @@ async def _cup_cross_asst(
         days = _cup_days(chat, citizen)
         days_field = "/".join(day for day in _AGENDA_WEEKDAYS if day in days)
         language, gender = _lang(chat, citizen), _gender(chat, citizen)
-        # MACH-1.3: the asker sets the window with date and time; a 1.2 facility ignores these tokens.
+        # MACH-1.4 keeps the date and time window introduced in 1.3.
         until = _true_deadline(chat, citizen, priority)
-        window = f" mach=1.3 earliest={_utc(now + _min_lead(priority))}" + (f" deadline={_utc(until)}" if until else "")
+        window = f" mach=1.4 earliest={_utc(now + _min_lead(priority))}" + (f" deadline={_utc(until)}" if until else "")
         for partner in _cup_partner_candidates(found, service, local, language):
             request_id = f"rq-{token_hex(8)}"
             search = f"need.request service_type={service} procedure={procedure} priority={priority} request_id={request_id}"
@@ -1499,10 +1510,11 @@ async def _cup_cross_asst(
     offers, answered = collect(chat)
     # Only the turn that sent the searches waits for replies: every reply opens its own turn, and a
     # reply turn that polls holds the need's lock while the other replies queue behind it.
-    if started_here and searches.keys() - answered:
+    remaining = _CUP_PARTNER_REPLY_SECONDS - (monotonic() - cache.partner_search_started)
+    if started_here and remaining > 0 and searches.keys() - answered:
         fresh = await _until(
             city, message.need_id, chat,
-            lambda rows: not (searches.keys() - collect(rows)[1]), max_polls=6,
+            lambda rows: not (searches.keys() - collect(rows)[1]), max_polls=6, timeout=remaining,
         )
         offers, answered = collect(fresh)
     for slot in offers:

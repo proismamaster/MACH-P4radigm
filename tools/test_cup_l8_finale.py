@@ -72,10 +72,10 @@ dchat = [Message(type="chat", sender=CIT, recipient="x", msg_id="d", need_id="N-
                  body={"text": "Male, ginocchio. Mi serve un appuntamento al più presto, ma posso solo lun/mer/ven. need.request lang=it"})]
 check("lun/mer/ven -> mon, wed, fri", cup._cup_days(dchat, CIT) == {"mon", "wed", "fri"})
 
-print("MACH-1.3 nelle ricerche ai partner")
+print("MACH-1.4 nelle ricerche ai partner")
 import inspect
 src = inspect.getsource(cup._cup_cross_asst)
-check("la ricerca porta mach=1.3, earliest= e deadline= con data e ora", "mach=1.3" in src and "deadline=" in src)
+check("la ricerca porta mach=1.4, earliest= e deadline= con data e ora", "mach=1.4" in src and "deadline=" in src)
 
 print("FALLITE:", FAILS if FAILS else "nessuna")
 sys.exit(1 if FAILS else 0)
