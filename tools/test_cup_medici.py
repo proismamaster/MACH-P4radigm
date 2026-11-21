@@ -173,5 +173,14 @@ check("h3 per chi parla hindi: scartato", cup.fitting([H3], now=NOW, priority="B
 check("h3 per chi parla tigrino: tenuto", len(cup.fitting([H3], now=NOW, priority="B", lang="ti")) == 1)
 check("alternativa rilassata per hindi: mai l'h3", cup._cup_relaxed([H3], now=NOW, lang="hi", gender=None, procedure="VIS-FIS") == [])
 
+print("CUP - orologio dell'agenda (60x): l'ora letta dal Ledger invecchia")
+from datetime import timezone as _tz
+from city_sdk.city import LEDGER as _LEDGER
+row = Message(type="chat", sender=_LEDGER, recipient="agent:noi/cup", msg_id="ag", need_id="N-1",
+              body={"text": "agenda agenda_now=2026-11-19T09:00:00Z"}, sent_at="2026-11-21T00:40:00Z")
+later = datetime(2026, 11, 21, 0, 45, tzinfo=_tz.utc)
+got = cup._agenda_now([row], later)
+check("5 minuti reali dopo la lettura: agenda + 5 ore", got == datetime(2026, 11, 19, 14, 0, tzinfo=_tz.utc))
+
 print("FALLITE:", FAILS if FAILS else "nessuna")
 sys.exit(1 if FAILS else 0)

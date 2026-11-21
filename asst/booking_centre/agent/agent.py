@@ -316,6 +316,29 @@ async def _until(
     return fresh
 
 
+_AGENDA_RATE = 60  # agenda minutes per real minute (/v1/team/wave "rate")
+
+
+def _agenda_now(chat: list[Message], real_now: datetime | None = None) -> datetime | None:
+    """The agenda clock now: the Ledger's last agenda_now plus the real time since that reply.
+
+    The agenda runs 60x: a need resumed a few minutes later otherwise works hours in the past
+    (log cup.partners at 00:52 used 09:36 while the agenda was past 16:00)."""
+    found: tuple[datetime, datetime | None] | None = None
+    for row in chat:
+        if row.sender == LEDGER and first_word(row.text) == "agenda":
+            at = _when(fields_of(row.text).get("agenda_now", ""))
+            if at is not None:
+                found = (at, _when(row.sent_at or ""))
+    if found is None:
+        return None
+    at, read = found
+    if read is None:
+        return at
+    elapsed = (real_now or datetime.now(timezone.utc)) - read
+    return at + max(elapsed, timedelta(0)) * _AGENDA_RATE
+
+
 def _has_agenda(chat: list[Message]) -> bool:
     agenda = _ledger(chat, "agenda")
     return _when("" if agenda is None else agenda.get("agenda_now", "")) is not None
@@ -1318,7 +1341,7 @@ async def _advance_alone(
         if not procedure:
             return
         agenda = _ledger(fresh(chat), "agenda")
-        now = _when("" if agenda is None else agenda.get("agenda_now", ""))
+        now = _agenda_now(fresh(chat))
         world = _latest_slots(fresh(chat))
         if now is not None and world is not None:
             break
