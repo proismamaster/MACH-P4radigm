@@ -1,5 +1,19 @@
 # Journal (la voce più recente in alto)
 
+## 2026-11-21 12:05 — Alberto (Hhapca, con Claude) — Consultorio 1.0.12 verificato in sola lettura; correzione del ramo `past` pronta
+
+**Fatto**
+- Verifica sui messaggi del consultorio fino alle 10:56 UTC (dettagli e orari in `team/PROBLEMS.md`): i primi tre `held` dopo il rilascio (`…890911000386`, `…890911000396`, `…8909110003810002`) hanno il commit entro 2 s e tutti `STALE_FENCE` dopo 295-359 s; traccia con `need_id`, `hold_id` e orari UTC passata ad Andrei per i mentori. Nessun hold doppio dopo le 10:24, nessun `EXPIRED`, tre `cancel reason=past` senza hold.
+- Trovato un difetto della 1.0.12: dopo un `cancel reason=past` (ramo R7 del confirm) le offerte sostitutive non partono se il Ledger risponde dopo l'attesa: `…911000382` (pagina 2 alle 10:31:14) e `…911000394` (10:45:04) senza offerte. Correzione sul branch `hapca/consultorio-past-sostitutive`: `_replace_offers`, unico punto da cui partono le offerte sostitutive, segna il caso `replace:pending`; usato dal ramo `past` e da `_recover`. Test nuovo `cancel_past_e_pagina_due`: fallisce sul codice online (2 controlli), passa sul nuovo; 61 controlli nel file, 32 programmi di test verdi, card valida.
+
+**Problemi**
+- Non pubblicato: online c'è la 1.0.12 con il difetto, la correzione aspetta l'OK al rilascio (1.0.13).
+- Resta il limite della piattaforma: con il Ledger a 5-6 minuti per richiesta un hold scade prima del commit anche se il commit parte subito.
+- Non fatti, in rilasci separati: niente riprova dopo `STALE_FENCE` se lo slot è sotto le ~8 ore d'agenda (`…3810002`, retry a 6,0 h); anticipo minimo 16-20 ore per l'accesso diretto.
+
+**Prossimo passo**
+- OK al rilascio di `hapca/consultorio-past-sostitutive`, poi controllare che dopo un `cancel reason=past` arrivino le offerte (pagina 2 → offerte entro il push).
+
 ## 2026-11-21 11:30 — Alberto (Hhapca, con Claude) — Consultorio 1.0.12 online; con il Ledger a 3 minuti nessun commit può riuscire
 
 **Fatto**
