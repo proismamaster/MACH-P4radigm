@@ -13,6 +13,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import test_cup_l5_vincoli as base  # noqa: E402
+base.cup._CUP_OFFERS_PER_BATCH = 3  # questi test sono scritti per 3 offerte; le 5 si provano in test_cup_medici
 
 GENDER = {"h1": "f", "h2": "m", "h3": "m"}
 

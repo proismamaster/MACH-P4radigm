@@ -1648,13 +1648,17 @@ def _cup_doctor_gender(slot: dict[str, str]) -> str | None:
     return stated if stated in {"m", "f"} else None
 
 
-def _cup_varied(slots: list[dict[str, str]], count: int = 3) -> list[dict[str, str]]:
+_CUP_OFFERS_PER_BATCH = 5  # the citizen answers once: 3 offers were all refused in 56 of 90 journeys (11:20)
+
+
+def _cup_varied(slots: list[dict[str, str]], count: int | None = None) -> list[dict[str, str]]:
     """The offers for one message: the first slot as ranked, then the ones that add a doctor gender
     or a weekday not offered yet. The citizen has hidden gender and day preferences and answers once
     (console 21/11: all three offers refused with reason=gender or reason=day; on Thursday and
     Friday physiatry has only male doctors, so "one slot per day" gave three male offers).
     A new gender counts more than a new day; ties keep the original order."""
 
+    count = count or _CUP_OFFERS_PER_BATCH
     if len(slots) <= count:
         return list(slots)
     picked = [slots[0]]
@@ -1662,15 +1666,22 @@ def _cup_varied(slots: list[dict[str, str]], count: int = 3) -> list[dict[str, s
     while len(picked) < count and rest:
         days = {slot.get("day") for slot in picked}
         genders = {_cup_doctor_gender(slot) for slot in picked}
+        halves = {_cup_half_day(slot) for slot in picked}
 
         def gain(index: int) -> tuple[int, int]:
             slot = rest[index]
             gender = _cup_doctor_gender(slot)
             new_gender = gender is not None and gender not in genders
-            return (3 * new_gender + 2 * (slot.get("day") not in days), -index)
+            new_half = _cup_half_day(slot) not in halves  # hidden after=/before= preferences
+            return (3 * new_gender + 2 * (slot.get("day") not in days) + new_half, -index)
 
         picked.append(rest.pop(max(range(len(rest)), key=gain)))
     return picked
+
+
+def _cup_half_day(slot: dict[str, str]) -> str:
+    at = _when(slot.get("at", ""))
+    return "" if at is None else ("am" if at.hour < 13 else "pm")
 
 
 async def _cup_offer_batch(

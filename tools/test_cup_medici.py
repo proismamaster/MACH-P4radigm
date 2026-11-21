@@ -199,5 +199,19 @@ can = Message(type="chat", sender=CUP_ID, recipient=CIT, msg_id="c9", need_id="N
               body={"text": "cancel booking_id=bk-1 slot_id=S-1 reason=facility_cancelled"})
 check("dopo il nostro cancel facility_cancelled il caso si riapre", cup._cup_case([offer_msg, rec, can], CUP_ID, CIT).receipt is None)
 
+print("CUP - cinque offerte varie per messaggio (il cittadino risponde una volta sola)")
+def S(i, doc, at):
+    return {"slot_id": f"V-{i}", "doctor_id": doc, "facility": "agent:p/hosp", "procedure": "VIS-FIS", "at": at,
+            "day": cup._AGENDA_WEEKDAYS[cup._when(at).weekday()]}
+many = [S(1, "asst-bicocca-h2", "2026-11-26T09:00:00+00:00"), S(2, "asst-bicocca-h2", "2026-11-26T10:30:00+00:00"),
+        S(3, "asst-bicocca-h2", "2026-11-26T12:00:00+00:00"), S(4, "asst-bicocca-h1", "2026-11-25T14:30:00+00:00"),
+        S(5, "asst-bicocca-h3", "2026-11-24T15:00:00+00:00"), S(6, "asst-bicocca-h2", "2026-11-27T09:00:00+00:00"),
+        S(7, "asst-bicocca-h1", "2026-11-23T09:00:00+00:00"), S(8, "asst-bicocca-h2", "2026-11-26T16:00:00+00:00")]
+got = cup._cup_varied(many)
+check("fino a 5 offerte", len(got) == 5)
+check("entrambi i generi", {cup._cup_doctor_gender(s) for s in got} >= {"m", "f"})
+check("almeno 3 giorni diversi", len({s["day"] for s in got}) >= 3)
+check("mattina e pomeriggio", {cup._cup_half_day(s) for s in got} == {"am", "pm"})
+
 print("FALLITE:", FAILS if FAILS else "nessuna")
 sys.exit(1 if FAILS else 0)

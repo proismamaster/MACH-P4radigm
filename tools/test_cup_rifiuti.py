@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_cup_l5_vincoli as base  # noqa: E402  (riusa il Ledger finto del test L5, senza modificarlo)
 
 cup = base.cup
+base.cup._CUP_OFFERS_PER_BATCH = 3  # questi test sono scritti per 3 offerte; le 5 si provano in test_cup_medici
 AGENT, CITIZEN = base.AGENT, base.CITIZEN
 
 
