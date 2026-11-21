@@ -183,7 +183,32 @@ async def sedia_a_rotelle() -> None:
     check("nessuna offerta, neanche rilassata", not lines_of(text, "offer"), h)
 
 
+# Righe vere del Ledger (team/PROBLEMS.md): agenda_date in UTC con millisecondi e "Z".
+REAL = (f"slot_id=W01QQQ-asst-bicocca-c1-20261124-1030 capacity=1 facility={ME} doctor_id={DOC} "
+        f"procedure={PROC} agenda_day=tue agenda_date=2026-11-24T09:30:00.000Z urgent_reserve=false")
+
+
+async def righe_vere() -> None:
+    print(f"Righe vere del Ledger ({ROLE})")
+    h = harness([REAL])
+    await h.turn(CUP, search("rq-V1", "after=10:00 before=11:00 days=tue"))
+    out = replies(h)
+    check("09:30Z sono le 10:30 a Milano: dentro after=10:00 before=11:00",
+          bool(out) and "slot_id=W01QQQ-asst-bicocca-c1-20261124-1030" in out[0]
+          and "relaxed=" not in out[0], h)
+    if ROLE != "family_counseling":
+        return
+    cit = "citizen:t02/c-0200"
+    h = harness([REAL])
+    await h.turn(cit, "vorrei una visita ginecologica")
+    offers = h.out(cit, "offer")
+    check("accesso diretto: il cittadino riceve l'offerta con le righe vere",
+          any("slot_id=W01QQQ-asst-bicocca-c1-20261124-1030" in o
+              and "agenda_date=2026-11-24T09:30:00.000Z" in o for o in offers), h)
+
+
 async def run() -> None:
+    await righe_vere()
     await criteri_estesi()
     await offerte_rilassate()
     await sedia_a_rotelle()
