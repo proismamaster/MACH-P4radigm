@@ -1,6 +1,19 @@
 
 # Problemi
 
+## Verdetti delle 06:00-08:38 (console, 200 percorsi, 99 chiusi letti uno per uno)
+
+**1. Cardiologia con le righe dello specialist** (per il follow-up chiesto da Andrei). Percorso `N-2026-11-02-8909110001820005`, L4, `done`, punteggio +3:
+- GP: messaggio 07:15:11 UTC → ricetta VIS-CARD B alle 07:17:34. CUP: `need.request` 07:18:35 → offerta 07:23:12 (s1, lun 14/12 14:30) → confirm 07:24:07 → ricevuta 07:28:45. Check-in del cittadino 07:30:06 (`agenda_time=2026-12-14T14:56`); lo specialist risponde alle 07:33:55 con `checkin` e `consent purpose=report_sharing`. Il cittadino non risponde; verdetto alle 07:38:26.
+- Fatti: `hold`, `commit ok=false (in_pref=false, in_set=false)`, `checkin ok=true`, **`report ok=false`**, `receipt ok=true`.
+- Righe: GP `protocol_match +2`; CUP **`booking_outside_set -1`**; specialist `checkin_honored +2`, **`report_missing -1`**; Ledger `honored_slot +1`. Nessuna riga di follow-up: senza referto non si vede se il protocollo lo chiedeva.
+- **Specialist (Ismail/Andrei)**: archivia il referto solo quando arriva la risposta al consenso (`_on_report_consent`). Il kit: "Referto archiviato e follow-up per protocollo +2", "Referto mancante −1", e "se la risposta non contiene il campo chiesto ... lo specialista archivia il referto non condiviso. Aspettare una risposta che non arriverà lascia il percorso fermo". Da decidere: archiviare il referto non condiviso se il consenso non arriva entro poco tempo.
+- **CUP**: lo slot era ~4,5 ore d'agenda dopo l'offerta (minimo 4 ore della 1.0.23). Con 4,6 minuti tra confirm e ricevuta, al commit era già passato (agenda ~15:20 per uno slot delle 14:30) → fuori dall'insieme. Il minimo di 10 ore (`e2d1518`, CUP 1.0.24 alle 10:00) lo esclude.
+
+**2. Quattro `emergency.no_escalation -2` sul GP** (05:10-05:18 UTC): il GP ha mandato `escalate.emergency` in tutti e quattro i casi, ma 6,7-7,6 minuti dopo il messaggio (05:10:07-05:11:21 → 05:16:49-05:18:03), dopo che i cittadini avevano rimandato il messaggio (05:15:17). Il caso giudicato `ok=true` aveva l'escalation prima di quel nuovo invio. Causa: ritardo di consegna della piattaforma in quei minuti (vedi sotto), non una red flag mancata. Nessuna correzione possibile nel codice.
+
+**3. Righe del CUP nei 99 chiusi**: `wrong_outcome` 35, `empty_set_alternative` 31.
+
 ## CAUSA CONFERMATA (21/11 06:15): il Ledger risponde in 7-9 minuti, ogni passaggio costa ore d'agenda
 
 Dati: messaggi di CUP, GP e consultorio letti da `/v1/team/agents/<id>/messages` (21/11 04:18-05:15 UTC, 1900 messaggi del CUP, 600 del GP, 300 del consultorio) e percorsi da `/v1/team/journeys/<need_id>`. Orari UTC.
