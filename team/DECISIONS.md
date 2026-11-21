@@ -1,6 +1,12 @@
 
 # Decisioni
 
+## 2026-11-21 11:00 — Il consultorio aspetta la risposta del Ledger nella cronologia, non nel push
+Il Ledger risponde in 40-130 s e il push della sua risposta apre il nostro turno 40-90 s dopo (pod fermo, un solo caso: `held` 08:20:49, commit 08:22:23); un hold regge circa due minuti e 27 commit su 36 sono finiti in `STALE_FENCE`. Dopo agenda/world, hold e commit il turno rilegge la cronologia (la risposta c'è appena il Relay l'accetta) fino a 180 s, ogni secondo per 30 s e poi ogni 2 s, e prosegue subito; scaduta l'attesa vale il push come prima. In cloud il brain gira dopo il `202` del push (`defer`) e un messaggio riconsegnato mentre gira non lo rilancia (`_hold_redelivery`), quindi un turno lungo non si duplica. Rischio accettato: più letture della cronologia (circa una al secondo per ogni attesa aperta). Prova: `tools/test_consultorio_ledger_lento.py`, classe `Arena`.
+
+## 2026-11-21 11:00 — Gli slot presi si segnano per tutto il processo; un solo giro di offerte
+Il consultorio tiene ogni slot della sua struttura, quindi sa cosa è tenuto, prenotato o passato (`_GONE`): `held` e `full` valgono 150 s, `booked` e `past` per sempre; il caso che tiene lo slot non vede come preso il proprio hold. Gli slot segnati non si offrono né ad altri cittadini né ai CUP e un confirm su uno slot già preso riceve subito il cancel (senza un hold che il Ledger rifiuterebbe dopo 100 s). Lo slot rifiutato resta anche nella memoria del caso (`refused:`): il cancel appena mandato non è ancora nella cronologia da cui si calcolano le offerte sostitutive. Ogni risposta del Ledger (agenda, slots) dopo le offerte non ne aggiunge più (prima 3 in più a ogni push) e gli slot non offerti negli ultimi 150 s vanno in testa (`_spread`): i cittadini scelgono la prima offerta, la stessa prima scelta per tutti è un NO_CAPACITY certo. Con una pagina da 4 slot validi e più di 4 cittadini insieme la contesa resta.
+
 ## 2026-11-21 08:29 — GP 1.0.5 pubblicato durante il freeze
 Il Ledger rispondeva in 7-9 minuti e il GP aspettava il `world` prima di ogni ricetta: un giro intero (circa 14 ore d'agenda della finestra B) per ogni cittadino. Alberto ha dato l'OK al deploy del solo GP alle 08:29. CUP e consultorio restano al deploy delle 10:00 di Andrei. Rollback: `city rollback agent:rng5wcrzvhsj --to 1.0.4`.
 

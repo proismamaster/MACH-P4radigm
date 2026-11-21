@@ -1,6 +1,41 @@
 
 # Problemi
 
+## Consultorio e latenza del Ledger: NO_CAPACITY, STALE_FENCE, tempi di hold e commit (21/11, dati 10:50 locali)
+
+Fonte: `/v1/team/agents/<id>/messages` (consultorio 1741 messaggi dal 20/11 22:30 UTC) e i percorsi `2560005` e `3290003`. Orari UTC. Lo strumento è `tools/misura_latenze.js` (si incolla nella console di `/team`; `await misura('agent:nkh372rd16yq')`).
+
+**I due percorsi (stessa storia).** 07:30:12 messaggio del cittadino → 07:31:24 il consultorio chiede agenda e world (+71 s) → 07:33:08 risposta del Ledger → 07:34:44 prime offerte (+96 s): 15/12 10:30, 12:00, 14:30, 16:00, cioè **tutti e soli gli slot validi della pagina 1**, uguali per cinque cittadini (2710004, 2660004, 2560005, 3290003, 3200003). 07:35:33 il cittadino conferma il primo → 07:37:19 hold (+105 s) → 07:39:08 `refused hold code=NO_CAPACITY` (+109 s: un altro caso tiene lo slot) → 07:40:23 `cancel reason=NO_CAPACITY` (+69 s) e subito (70 ms) tre offerte che **riportano lo slot rifiutato come prima della lista**. Il cittadino lo riconferma alle 07:41:28, 07:57:29, 08:13:31: nessuna risposta (secondo hold mai mandato, cronologia senza novità). Percorso chiuso `failed`.
+
+**Cause confermate (non ipotesi).**
+1. *Slot rifiutato riproposto.* `_on_refused` mandava il cancel e poi calcolava le offerte sostitutive sulla cronologia letta prima: il cancel appena mandato non c'è, quindi `_withdrawn` non lo vedeva e lo slot (ancora `free=1` nella pagina del Ledger) tornava primo.
+2. *Contesa.* Cinque cittadini, quattro slot, stessa lista nello stesso ordine: con capacità 1 ne passa uno. Prima ogni push di agenda/slots aggiungeva un secondo giro di offerte (4 offerte invece di 3).
+3. *STALE_FENCE: il commit parte tardi.* Su 36 `held` del consultorio: 9 `committed`, 27 `refused commit STALE_FENCE detail=the fence expired`. I commit partiti entro 10 s da `held` sono riusciti tutti (0, 1, 1, 4, 7, 7, 8, 10 s; uno a 42 s); quelli partiti dopo 60 s o più sono falliti tutti (60-369 s). Contando da `held` fino alla risposta al commit, i riusciti stanno tra 12 e 98 s e i falliti partono da 125 s: l'hold regge circa due minuti. Il ritardo è il push: il Relay accetta `held` e il nostro turno parte 60-90 s dopo (caso `3200004` solo, pod fermo: `held` 08:20:49, commit 08:22:23).
+4. *EXPIRED sull'hold = slot passato* (`detail=slot ... has passed`): 50 hold su 98 con risposta. Una riprova non può riuscire e costava altri 2-3 minuti reali.
+5. *Il pod non è il collo di bottiglia:* il caso `3200004` era l'unico attivo (08:15-08:35) e ogni passaggio costava comunque 40-130 s; ci sono passaggi da 4-10 s (08:32:58 `held` → commit dopo 5 s → `committed` → ricevuta dopo 10 s). Lo scale non serve.
+
+**Tempi per fase** (mediana / p90 in secondi, (n); finestre di 2 ore UTC; il Ledger e noi siamo separati):
+
+| Fase | 20/11 22-24 | 21/11 00-02 | 02-04 | 04-06 | 06-08 | 08-10 |
+|---|---|---|---|---|---|---|
+| **Prima offerta** — nostro ritardo prima di chiedere al Ledger | 2/4 (3) | 37/152 (7) | 192/240 (29) | 439/523 (5) | 69/69 (4) | 53/56 (4) |
+| risposta del Ledger a agenda e world | 5/7 | 39/364 | 185/230 | 451/503 | 106/106 | 44/59 |
+| nostro ritardo dopo la risposta, fino all'offerta | 2/8 | 41/172 | 194/252 | 401/480 | 91/95 | 47/55 |
+| **totale primo messaggio → prima offerta** | 15/17 | 120/620 | 586/668 | 1320/1367 | 275/275 | 150/153 |
+| **Hold** — confirm → hold (nostro) | 9/10 (3) | 45/317 (7) | 195/653 (42) | 346/872 (30) | 107/461 (10) | 44/359 (6) |
+| hold → `held` o rifiuto (Ledger) | 16/16 | 32/156 | 183/220 | 290/508 | 107/132 | 69/92 |
+| **Commit** — `held` → commit (nostro) | 10/10 (2) | 1/78 (5) | 174/220 (12) | 336/369 (6) | 68/77 (6) | 8/92 (5) |
+| commit → `committed` o rifiuto (Ledger) | 15/15 | 15/118 | 184/210 | 341/358 | 67/79 | 82/94 |
+| `committed` → ricevuta (nostro) | 7/7 | 14/50 (4) | — | — | — | 17/17 (3) |
+
+In ogni finestra **il nostro ritardo è pari a quello del Ledger**: ogni passaggio del Relay costa lo stesso nei due sensi. Esiti dell'intera serie: `commit STALE_FENCE` 27, `committed` 9, `hold EXPIRED` 50, `hold NO_CAPACITY` 11, `hold FACILITY_CANCELLED` 1.
+
+**Correzione** (branch `hapca/consultorio-ledger-lento`, non ancora pubblicata): nel consultorio il turno che ha appena chiesto al Ledger rilegge la cronologia (la risposta c'è appena il Relay l'accetta, il push arriva dopo) fino a 180 s, poi lascia al push come prima; commit subito dopo `held`, ricevuta subito dopo `committed`, offerte subito dopo agenda e world. Lo slot rifiutato resta nella memoria del caso; gli slot tenuti, prenotati o passati sono segnati per tutto il processo e non si offrono né ad altri cittadini né ai CUP; un confirm su uno slot già preso riceve subito il cancel (niente hold che il Ledger rifiuterebbe dopo 100 s). EXPIRED sull'hold non si riprova; STALE_FENCE ed EXPIRED sul commit una volta sola. Un solo giro di offerte per risposta del Ledger, con in testa gli slot non offerti negli ultimi 150 s. Un rifiuto immediato del Relay (CapError su hold o commit: `EXPIRED`, `NO_CAPACITY`, `STALE_FENCE`...), che `_say` inghiottiva lasciando il confirm senza risposta, passa dallo stesso recupero; un errore incerto (429, 5xx) libera il claim e il confirm rimandato rifà l'hold (come nell'ospedale, PR #98). `history` in 504 in `main()` si rilegge tre volte invece di chiudere il messaggio come `rejected`. Il cancel nomina l'`offer_id` della riga dello slot (con l'offerta unica nominava quello della prima). Test: `tools/test_consultorio_ledger_lento.py` (53 controlli, 32 falliscono su `main`).
+
+**Non confermato.** (a) Quanto dura davvero l'hold: dalle tempistiche 100-125 s dalla risposta del Ledger, ma la durata non è nel kit. (b) Se la lettura della cronologia ogni 1-2 s per 3 minuti pesi sul Relay: 5 casi in parallelo sono circa 5 letture al secondo, come le 24 letture da 0,25 s di prima ma più lunghe. (c) Con una sola pagina di 4 slot validi e più di 4 cittadini insieme la contesa resta: i cittadini oltre il quarto ricevono slot già offerti, in coda; il Ledger si rilegge alla pagina 2 solo quando finiscono.
+
+**Stesso problema nelle altre strutture** (stessa misura sulla cronologia disponibile: ospedale dalle 08 UTC, specialist dalle 00 UTC): ospedale `hold NO_CAPACITY` 28 su 42, `commit STALE_FENCE` 10 su 12 (`held` → commit mediana 107 s, p90 178); specialist `hold NO_CAPACITY` 112, `hold EXPIRED` 20, `commit STALE_FENCE` 17 su 24 (`held` → commit mediana 61-87 s). Sono i file di Andrei e di Ismail: la stessa attesa e lo stesso segno degli slot presi sono da portare, non l'ho fatto.
+
 ## CUP, campione precedente al rilascio della 1.0.24 (21/11)
 
 - Nei 39 export di percorsi falliti, i rifiuti del cittadino compaiono in 14 percorsi per `day`, 13 per `gender`, 11 per `deadline` e 1 per `past`. Le categorie si sovrappongono. Sono conteggi tra i falliti esportati e non misurano il tasso di errore della wave.

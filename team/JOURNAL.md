@@ -1,5 +1,22 @@
 # Journal (la voce più recente in alto)
 
+## 2026-11-21 11:05 — Alberto (Hhapca, con Claude) — Consultorio: NO_CAPACITY, STALE_FENCE e tempi di hold e commit
+
+**Fatto** (branch `hapca/consultorio-ledger-lento`, 3 commit sopra `main`; NON pubblicato, online resta la 1.0.9)
+- Riprodotti i percorsi 2560005 e 3290003 dalla console (`/v1/team/journeys/<need>` e i messaggi del consultorio): cinque cittadini ricevono le stesse quattro offerte, il primo che conferma tiene lo slot, gli altri `NO_CAPACITY` dopo ~100 s, e il cancel è seguito da offerte che **citano di nuovo lo slot rifiutato** (il cancel appena mandato non è nella cronologia da cui si calcolano). Il cittadino lo riconferma e resta senza risposta (07:41, 07:57, 08:13).
+- Misurati i tempi **separati** (tabella in `team/PROBLEMS.md`, strumento `tools/misura_latenze.js`): prima offerta, hold, commit. In ogni finestra il nostro ritardo è pari a quello del Ledger; 27 commit su 36 rifiutati `STALE_FENCE`: i commit partiti entro 10 s da `held` riescono tutti, quelli oltre 60 s falliscono tutti.
+- Correzioni: attesa paziente della risposta (commit subito dopo `held`, ricevuta subito dopo `committed`, offerte subito dopo agenda e world); slot rifiutato mai riproposto; slot tenuti, prenotati o passati segnati per tutto il processo (anche per le ricerche dei CUP) e un confirm su uno slot già preso riceve subito il cancel; EXPIRED sull'hold non si riprova (è uno slot passato); un solo giro di offerte per risposta del Ledger; rifiuti immediati del Relay (CapError su hold e commit) e `history` in 504 gestiti come nell'ospedale (#98); `offer_id` del cancel letto sulla riga giusta.
+- Test: `tools/test_consultorio_ledger_lento.py` (53 controlli, 32 falliscono su `main`); tutti gli altri verdi (28 programmi), card valida. `test_facility.py` ora spegne l'attesa paziente nei test.
+
+**Problemi**
+- Non confermato: la durata dell'hold (dai dati circa 2 minuti, non nel kit) e l'effetto reale delle correzioni, che si vede solo dopo il deploy.
+- Il file del consultorio passa da 2026 a 2236 righe: i deploy fin qui (2020 righe) sono passati, questo non è provato. Rollback pronto: `city rollback agent:nkh372rd16yq --to 1.0.9`.
+- **Ospedale e specialist hanno lo stesso schema** (`hold NO_CAPACITY` 28 su 42 e 112, `commit STALE_FENCE` 10 su 12 e 17 su 24; `held` → commit mediana 107 s e 61-87 s). Sono file di Andrei e di Ismail: l'attesa paziente e il segno degli slot presi sono da portare lì (Ismail ha già #107 sul commit tardivo dello specialist).
+- `tools/test_mach12_struttura.py asst/hospital/agent/agent.py` fallisce in 7 punti già su `main` (fixture dell'ospedale vecchie), non per questa modifica.
+
+**Prossimo passo**
+- Pubblicare il consultorio (serve l'OK), poi rilanciare `await misura('agent:nkh372rd16yq')` sui percorsi nuovi: `held` → commit sotto i 10 s, `committed` contro `STALE_FENCE`, `hold NO_CAPACITY` e `hold EXPIRED`.
+
 ## 2026-11-21 10:35 — Andrei (Claude) — Ospedale 1.0.5 online; 1.0.6: un confirm non resta mai senza risposta (3590002)
 
 **Dove si ferma la catena in 3590002** (dato di Ismail, #94: il CUP ha inoltrato il confirm, la struttura non ha mai risposto per 32 minuti, nessun hold nel verdetto). In locale, con un confirm valido, l'ospedale manda sempre l'hold. Nel codice ci sono due strade che portano al silenzio, tutte e due nell'ospedale:
