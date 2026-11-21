@@ -344,31 +344,20 @@ async def _until(
     ready: Callable[[list[Message]], bool],
     *,
     max_polls: int | None = None,
-    timeout: float | None = None,
 ) -> list[Message]:
     """Re-read the case until ``ready`` or the short wait ends. The push may never arrive."""
 
     fresh = chat
     polls = _PULL_TRIES if max_polls is None else min(max_polls, _PULL_TRIES)
-    clock = asyncio.get_running_loop().time
-    deadline = None if timeout is None else clock() + timeout
     for attempt in range(polls):
-        if deadline is not None and clock() >= deadline:
-            break
         try:
-            async with asyncio.timeout_at(deadline):
-                fresh = await city.history(need_id=need_id)
-        except TimeoutError:
-            if deadline is None:
-                raise
-            break  # The initial collection closes with its last successful read.
+            fresh = await city.history(need_id=need_id)
         except CapError:
             fresh = chat
         if ready(fresh):
             return fresh
         if attempt + 1 < polls:
-            pause = _PULL_PAUSE if deadline is None else min(_PULL_PAUSE, max(0.0, deadline - clock()))
-            await asyncio.sleep(pause)
+            await asyncio.sleep(_PULL_PAUSE)
     return fresh
 
 
@@ -1512,11 +1501,20 @@ async def _cup_cross_asst(
     # reply turn that polls holds the need's lock while the other replies queue behind it.
     remaining = _CUP_PARTNER_REPLY_SECONDS - (monotonic() - cache.partner_search_started)
     if started_here and remaining > 0 and searches.keys() - answered:
-        fresh = await _until(
-            city, message.need_id, chat,
-            lambda rows: not (searches.keys() - collect(rows)[1]), max_polls=6, timeout=remaining,
-        )
-        offers, answered = collect(fresh)
+        def received_all(rows: list[Message]) -> bool:
+            nonlocal offers, answered
+            if rows is not chat:
+                offers, answered = collect(rows)
+            return not (searches.keys() - answered)
+
+        try:
+            async with asyncio.timeout(remaining):
+                fresh = await _until(city, message.need_id, chat, received_all, max_polls=6)
+        except TimeoutError:
+            pass  # The next inbound reply can still supply a slot after the initial round.
+        else:
+            if fresh is None:
+                return  # A failed history read cannot be treated as a negative answer.
     for slot in offers:
         _PARTNER_GOOD.setdefault(service, {})[slot["facility"]] = None
     _LOG.warning(
