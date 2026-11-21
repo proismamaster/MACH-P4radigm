@@ -17,7 +17,7 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from city_sdk.city import LEDGER, City, Message, Need, Peer
+from city_sdk.city import LEDGER, CapError, City, Message, Need, Peer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -788,8 +788,76 @@ async def prova_m() -> None:
           bool(offer_id) and len(holds) == 1 and "slot_id=M-2" in holds[0].split(), h)
 
 
+class FlakyPort(Port):
+    """Il Relay vero: history in 504 la prima volta, o l'hold rifiutato subito con una CapError."""
+
+    def __init__(self, me: str, *, history_fails: int = 0, hold_error: str = "") -> None:
+        super().__init__(me)
+        self.history_fails = history_fails
+        self.hold_error = hold_error
+
+    async def history(self, *, peer=None, need_id=None):
+        if self.history_fails:
+            self.history_fails -= 1
+            raise CapError("UPSTREAM_TIMEOUT", "history")
+        return await super().history(peer=peer, need_id=need_id)
+
+    async def post(self, *, to, message_type, body, need_id, conversation_id, traceparent):
+        if self.hold_error and to == LEDGER and body.get("text", "").startswith("hold "):
+            raise CapError(self.hold_error, "hold")
+        return await super().post(to=to, message_type=message_type, body=body, need_id=need_id,
+                                  conversation_id=conversation_id, traceparent=traceparent)
+
+
+async def prova_n() -> None:
+    """Il confirm del CUP non resta mai senza risposta (3590002: confirm del cittadino in 55 s, il CUP
+    inoltra, la struttura tace 32 minuti, nessun hold nel verdetto).
+
+    Il Relay puo' rifiutare l'hold subito con una CapError (EXPIRED, NO_CAPACITY... come i `cancel
+    EXPIRED` del consultorio un secondo dopo il confirm): `_say` la inghiottiva e il turno finiva muto.
+    Un'eccezione nel brain (history in 504) chiude il messaggio come `rejected` per sempre (harness:
+    "agent crashed"), senza nuovi invii."""
+
+    print("Prova N - hold rifiutato dal Relay o history in 504: il CUP lo sa, niente silenzio")
+    confirm = (f"confirm offer_id=of-abc-1 slot_id=S-1 citizen={CIT} consent_ref=cons-N-booking "
+               f"facility={HOSP} prescription_number=prescription_number-N-1")
+
+    h = Harness("hospital.physiatry", HOSP, World(HOSP))
+    h.port = FlakyPort(HOSP, history_fails=1)
+    try:
+        await h.turn(CUP_OWN, confirm)
+        crashed = False
+    except Exception:  # noqa: BLE001 - e' proprio quello che la prova esclude
+        crashed = True
+    check("history in 504 al primo giro: nessun crash, l'hold parte", not crashed and len(h.out(LEDGER, "hold")) == 1, h)
+
+    for code, expected in (("NO_CAPACITY", "cancel"), ("EXPIRED", "hold_refused")):
+        h = Harness("hospital.physiatry", HOSP, World(HOSP))
+        h.port = FlakyPort(HOSP, hold_error=code)
+        await h.turn(CUP_OWN, confirm)
+        back = h.out(CUP_OWN, expected)
+        check(f"hold rifiutato dal Relay ({code}): il CUP riceve {expected} per of-abc-1",
+              len(back) == 1 and "offer_id=of-abc-1" in back[0].split() and code.lower() in back[0].lower()
+              and not h.out(CUP_OWN, "booking.receipt"), h)
+
+    h = Harness("hospital.physiatry", HOSP, World(HOSP))
+    h.port = FlakyPort(HOSP, hold_error="UPSTREAM_TIMEOUT")
+    await h.turn(CUP_OWN, confirm)
+    silent = not h.out(CUP_OWN)
+    h.port.hold_error = ""
+    await h.turn(CUP_OWN, confirm)  # il watchdog del CUP (#94) rimanda lo stesso confirm
+    check("hold in 504 (esito incerto): niente cancel; il confirm rimandato fa l'hold e la ricevuta",
+          silent and len(h.out(LEDGER, "hold")) == 1 and len(h.out(CUP_OWN, "booking.receipt")) == 1, h)
+
+    h = Harness("hospital.physiatry", HOSP, World(HOSP))
+    h.port = FlakyPort(HOSP, hold_error="DUPLICATE")
+    await h.turn(CUP_OWN, confirm)
+    check("hold DUPLICATE (gia' sul Ledger): nessun cancel al CUP",
+          not h.out(CUP_OWN, "cancel") and not h.out(CUP_OWN, "hold_refused"), h)
+
+
 async def run() -> None:
-    # Ogni agente ha le sue prove: A, B, D, F, G, I-M provano l'ospedale, C il consultorio; E e H valgono per tutti.
+    # Ogni agente ha le sue prove: A, B, D, F, G, I-N provano l'ospedale, C il consultorio; E e H valgono per tutti.
     if "family_counseling" in os.path.normpath(AGENT_FILE).split(os.sep):
         await prova_c()
     else:
@@ -803,6 +871,7 @@ async def run() -> None:
         await prova_k()
         await prova_l()
         await prova_m()
+        await prova_n()
     await prova_e()
     await prova_h()
     print(f"\n{'TUTTO OK' if not FAILS else str(len(FAILS)) + ' FALLITE'}")

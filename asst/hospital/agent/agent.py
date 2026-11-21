@@ -147,7 +147,14 @@ async def main(need: Need, city: City) -> None:
         # (up to 5 signed pages of 200): the conformance probes have none, and on our ~1400
         # messages that kept the turn open past the 5 s custody.ack waits for the lease renew.
         return
-    case = await city.history(need_id=message.need_id)
+    try:
+        case = await city.history(need_id=message.need_id)
+    except CapError as error:
+        # An exception here ends the turn as "agent crashed": the harness acks the message as
+        # rejected and it never comes back (3590002: a confirm lost, no hold, the CUP waited 32
+        # minutes). The message itself carries what a confirm needs; later turns re-read history.
+        _LOG.warning("care.history.failed need=%s code=%s", message.need_id[:48], error.code)
+        case = [message]
     await handle(role_of(), city, message, case)
 
 
@@ -890,9 +897,14 @@ async def _on_confirm(
             if number:
                 parts.append(f"prescription_number={number}")
             parts.append(f"consent_ref={hold_consent}")
-            if not await _say(city, LEDGER, " ".join(parts)):
-                _release(hold_key)
-                return
+            try:
+                await city.say(LEDGER, " ".join(parts))
+            except CapError as error:
+                if not await _hold_not_sent(city, message, chat, slot, error, hold_self=hold_self):
+                    _release(hold_key)
+                    return
+            else:
+                _LOG.warning("care.hold need=%s slot=%s from=%s", (message.need_id or "")[:48], slot, message.sender)
         await _finish_booking(city, message, chat, slot, hold_self=hold_self)
         return
     if not facility or not citizen:
@@ -910,6 +922,35 @@ async def _on_confirm(
     if number:
         parts.append(f"prescription_number={number}")
     await _say(city, facility, " ".join(parts))
+
+
+# Relay errors on the hold with no definite outcome: the hold may or may not be on the Ledger. The
+# booking centre resends the same confirm after 180 s (#94) and the hold is tried again then.
+_UNCERTAIN = {"RATE_LIMITED", "DRAINING", "QUARANTINED", "SUSPENDED", "UPSTREAM_TIMEOUT", "AGENT_LOST_CUSTODY"}
+
+
+async def _hold_not_sent(
+    city: City, message: Message, chat: list[Message], slot: str, error: CapError, *, hold_self: bool
+) -> bool:
+    """The Relay refused the hold at once. True when the hold is there anyway (DUPLICATE): go on.
+
+    A definite refusal (EXPIRED, NO_CAPACITY, CONSENT_MISSING, STALE_FENCE...) is answered like a
+    Ledger ``refused hold``: the one who confirmed gets ``cancel``/``hold_refused`` and searches
+    again. Before, ``_say`` swallowed it and the confirm stayed without an answer (3590002)."""
+
+    _LOG.warning("care.hold.failed need=%s slot=%s code=%s", (message.need_id or "")[:48], slot, error.code)
+    if error.code in {"DUPLICATE", "IDEMPOTENCY_CONFLICT"}:
+        return True
+    if error.code in _UNCERTAIN or error.code == "TARGET_NOT_VISIBLE":
+        return False  # uncertain, or the Relay is refusing us altogether: nothing more to send now
+    refusal = Message(
+        type="chat", sender=LEDGER, recipient=city.agent_id, msg_id=f"relay-{message.msg_id}",
+        need_id=message.need_id, conversation_id=message.conversation_id,
+        body={"text": f"refused hold slot_id={slot} code={error.code}"},
+    )
+    rows = chat if any(row.msg_id == message.msg_id for row in chat) else [*chat, message]
+    await _on_refused(city, refusal, rows, hold_self=hold_self)
+    return False
 
 
 # --- facility ----------------------------------------------------------------------------------
