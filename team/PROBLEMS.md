@@ -53,6 +53,11 @@ In ogni finestra **il nostro ritardo è pari a quello del Ledger**: ogni passagg
 
 **Stesso problema nelle altre strutture** (stessa misura sulla cronologia disponibile: ospedale dalle 08 UTC, specialist dalle 00 UTC): ospedale `hold NO_CAPACITY` 28 su 42, `commit STALE_FENCE` 10 su 12 (`held` → commit mediana 107 s, p90 178); specialist `hold NO_CAPACITY` 112, `hold EXPIRED` 20, `commit STALE_FENCE` 17 su 24 (`held` → commit mediana 61-87 s). Sono i file di Andrei e di Ismail: la stessa attesa e lo stesso segno degli slot presi sono da portare, non l'ho fatto.
 
+## CUP: timeout della cronologia all'inizio del turno (21/11)
+
+- Su `main` a `7fc36cd`, un `UPSTREAM_TIMEOUT` (504) di `city.history` nel turno della conferma usciva da `main()` e l'SDK chiudeva il messaggio come `rejected`. Il test riproduce il guasto sul CUP. Il caso 3590002 è il riferimento per lo stesso tipo di guasto lato ospedale. La causa del silenzio in quel percorso resta da verificare nei log.
+- Il CUP ritenta una volta sui 5xx. Se la rilettura fallisce o l'errore è 4xx, registra `cup.history.failed` e si ferma prima di eseguire azioni che dipendono dallo stato.
+
 ## CUP, campione precedente al rilascio della 1.0.24 (21/11)
 
 - Nei 39 export di percorsi falliti, i rifiuti del cittadino compaiono in 14 percorsi per `day`, 13 per `gender`, 11 per `deadline` e 1 per `past`. Le categorie si sovrappongono. Sono conteggi tra i falliti esportati e non misurano il tasso di errore della wave.
