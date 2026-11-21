@@ -47,6 +47,12 @@ _RED_FLAGS = (
     "loss of strength in the legs",
     "dolore al petto",
     "chest pain",
+    # Level 8 hides the red flag in free text: the same two protocol flags, written differently.
+    "dolori al petto", "dolore toracico", "male al petto", "fitta al petto", "oppressione al petto",
+    "pain in my chest", "chest hurts", "chest pains", "chest tightness",
+    "forza alle gambe", "forza nelle gambe", "debolezza alle gambe", "debolezza nelle gambe",
+    "gambe deboli", "non sento le gambe", "non sento più le gambe",
+    "strength in my legs", "weakness in my legs", "legs are weak", "legs feel weak", "legs gave out",
 )
 _DEADLINE_DAYS = {"B": 2, "D": 5}
 _GP_FIELD = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}")
@@ -397,10 +403,20 @@ def _gp_world_red_flags(chat: list[Message]) -> set[str]:
     return flags
 
 
+def _flag_in(flag: str, text: str) -> bool:
+    """The world's red flag in the citizen's words: the phrase, or two thirds of its words (by their
+    first five letters) in any order ("ho perso forza nelle gambe" for "perdita di forza alle gambe")."""
+    if flag in text:
+        return True
+    stems = [word[:5] for word in re.findall(r"[a-zà-ù]+", flag) if len(word) >= 5]
+    have = {word[:5] for word in re.findall(r"[a-zà-ù]+", text) if len(word) >= 5}
+    return len(stems) >= 2 and sum(stem in have for stem in stems) * 3 >= len(stems) * 2
+
+
 def _gp_world_emergency(chat: list[Message], citizen: str) -> bool:
     flags = _gp_world_red_flags(chat)
     return bool(flags) and any(
-        row.sender == citizen and any(flag in row.text.lower() for flag in flags) for row in chat
+        row.sender == citizen and any(_flag_in(flag, row.text.lower()) for flag in flags) for row in chat
     )
 
 
@@ -609,9 +625,11 @@ async def _gp_select_protocol(
     if not _gp_world_received(chat):
         if not _exact(chat, city.agent_id, "world") and not await _gp_send(city, message, LEDGER, "world"):
             return None
-        fresh = await _until(city, message.need_id, chat, _gp_world_received, max_polls=8)
+        fresh = await _until(city, message.need_id, chat, _gp_world_received, max_polls=24)
         chat = _gp_case(fresh, message)
     if not _gp_world_received(chat):
+        # Never prescribe before reading world: level 8 hides red flags in its protocol table. The
+        # wait is 6 s (was 2 s: a slow world left the GP silent, 201); the world's own turn resumes.
         return None
     # The local SDK's world can explicitly answer with slots and no protocol table.
     return _gp_protocols(chat).get(code) or _PROTOCOLS.get(code)
