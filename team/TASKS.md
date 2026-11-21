@@ -56,7 +56,7 @@ Livello 5 «Vincoli combinati»: priorità, lingue e disponibilità si sovrappon
 | Ritardo del Ledger: letture condivise per ondata, richieste in parallelo, al massimo 6 partner | GP online 1.0.5 (08:29); CUP e consultorio alle 10:00 | `f72ce63` |
 | Console dopo il rilascio: tempi GP e CUP, ricerche ai partner, `day`/`gender`/`past`/`deadline`, ricevute | Abed: dati precedenti al rilascio registrati; campione successivo da raccogliere | `abed/cup-verifica-annullamenti` |
 | CUP: verificare il mittente e i riferimenti degli annullamenti dopo la ricevuta | Abed: online in CUP 1.0.24 | PR #93 / #97 · `abed/cup-verifica-annullamenti` |
-| CUP: riprovare la lettura della cronologia su 5xx senza perdere i riferimenti della conferma | Abed: in revisione | `abed/cup-history-timeout` |
+| CUP: riprovare la lettura della cronologia su 5xx senza perdere i riferimenti della conferma | Abed: in revisione | PR #106 · `abed/cup-history-timeout` |
 | Verdetto di cardiologia con le righe dello specialist (per il follow-up) | da cercare in console | — |
 | Riga `facts` MACH-1.3 per le nostre strutture su Discord | Alberto | — |
 
