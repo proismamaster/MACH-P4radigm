@@ -26,8 +26,10 @@ from city_sdk.city import LEDGER, CapError, City, Message, Need, OutOfScope, cli
 ROLES = ("booking_centre", "gp", "hospital", "specialist_care", "family_counseling")
 _MAX_PAGE = 8
 # Four agenda hours is about half a minute of real time at 480x, so a slot is still
-# ahead when the citizen decides. One hour was already past by then.
+# ahead when the citizen decides: it is the PREFERRED lead, slots nearer than that come last. One
+# hour is the minimum: hold and commit take real time and an earlier slot expires before check-in.
 _LEAD = timedelta(hours=4)
+_MIN_LEAD = timedelta(hours=1)
 # Doctor key (the last segment of doctor_id) -> languages, gender, days. ``*`` is the ASST's
 # rare language. The Ledger's slot line names the doctor; it does not repeat this table.
 _OWN_RARE_LANGUAGE = "ti"
@@ -402,7 +404,7 @@ def fitting(
         horizon = now.replace(hour=23, minute=59, second=59, microsecond=0)
     else:
         horizon = _agenda_horizon(now, _DEADLINE_DAYS.get(priority or "", 14))
-    earliest = now + _LEAD
+    earliest = now + _MIN_LEAD
     chosen: list[tuple[datetime, dict[str, str]]] = []
     for line in lines:
         slot = fields_of(line)
@@ -441,7 +443,7 @@ def fitting(
         if gender and spec[1] != gender:
             continue
         chosen.append((at, slot))
-    chosen.sort(key=lambda item: (item[0], item[1].get("slot_id", "")))
+    chosen.sort(key=lambda item: (item[0] < now + _LEAD, item[0], item[1].get("slot_id", "")))
     return [slot for _, slot in chosen]
 
 
@@ -950,6 +952,14 @@ async def _cup_confirm(
     expected = {"slot_id": slot, "facility": facility, "prescription_number": number, "citizen": citizen}
     if any(key in fields and fields[key] != value for key, value in expected.items()):
         return
+    # The slot may have come within the minimum lead while the citizen decided: ask again.
+    at, now = _when(offer.get("agenda_date", "")), _agenda_now(chat)
+    if at is not None and now is not None and at <= now + _MIN_LEAD:
+        await _cup_cancel(
+            city, message, chat, cache, citizen,
+            f"cancel offer_id={offer_id} reason=slot_expired Questo orario è appena passato.",
+        )
+        return
     partner_id = offer.get("partner_offer_id")
     if partner_id and state.cross_asst_declined:
         return
@@ -1117,7 +1127,7 @@ def _cup_partner_slots(
         horizon = now.replace(hour=23, minute=59, second=59, microsecond=0)
     else:
         horizon = _agenda_horizon(now, _DEADLINE_DAYS[priority])
-    earliest = now + _LEAD
+    earliest = now + _MIN_LEAD
     for row in chat:
         request_id = searches.get(row.sender)
         if not request_id:
@@ -1151,7 +1161,7 @@ def _cup_partner_slots(
                 continue
             if fields.get("priority", priority) != priority:
                 continue
-            free = fields.get("free", "1")
+            free = fields.get("free", fields.get("capacity", "1"))
             if not free.isdecimal() or int(free) <= 0:
                 continue
             reserved = fields.get("urgent_reserve", "").lower() == "true" or fields.get("reserve", "").upper() == "U"
@@ -1192,7 +1202,10 @@ def _cup_partner_slots(
                 "procedure": procedure, "at": fields["agenda_date"], "day": day,
                 "expiry": fields.get("expiry") or fields["agenda_date"], "partner_offer_id": offer_id, "request_id": request_id,
             }
-    return sorted(slots.values(), key=lambda slot: (_when(slot["at"]), slot["slot_id"])), answered
+    ordered = sorted(
+        slots.values(), key=lambda slot: (_when(slot["at"]) < now + _LEAD, _when(slot["at"]), slot["slot_id"])
+    )
+    return ordered, answered
 
 
 async def _cup_cross_asst(
