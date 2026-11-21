@@ -53,6 +53,21 @@ _RED_FLAGS = (
     "chest pain",
 )
 _DEADLINE_DAYS = {"B": 2, "D": 5}
+
+
+def _agenda_horizon(now: datetime, days: int) -> datetime:
+    """``now`` plus ``days`` days of AGENDA. Saturday and Sunday do not exist in the agenda: after
+    Friday it goes on from Monday (kit, ADR-124). B on a Thursday ends on Monday, not on Saturday."""
+
+    at = now
+    left = days
+    while left > 0:
+        at += timedelta(days=1)
+        if at.weekday() < 5:
+            left -= 1
+    return at
+
+
 _RX = re.compile(r"^prescription_number-[A-Z0-9-]{4,40}$")
 _LOG = logging.getLogger("care")
 # The Relay accepts a ledger reply and then the agent rejects the push, so the reply sits in
@@ -424,7 +439,7 @@ def _search_slots(slots_text: str, *, now: datetime, me: str, fields: dict[str, 
     elif priority == "P":
         horizon = None
     else:
-        horizon = now + timedelta(days=_DEADLINE_DAYS.get(priority, 14))
+        horizon = _agenda_horizon(now, _DEADLINE_DAYS.get(priority, 14))
     lang = fields.get("lang", "").lower()
     gender = (fields.get("gender_preference") or fields.get("gender") or "").lower()
     days = set(re.split(r"[/,;\s]+", fields.get("days", "").lower())) & set(_WEEK)
