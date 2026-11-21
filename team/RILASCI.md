@@ -17,7 +17,7 @@ Chi rilascia aggiunge la riga **subito dopo** `city deploy` / `city rollback`, n
 |---|---|---|---|---|---|
 | gp | `agent:rng5wcrzvhsj` | 1.0.5 | 07:29 | — | 1.0.4 |
 | booking_centre | `agent:ez8cb7j167p2` | 1.0.23 | 04:32 | — | 1.0.22 |
-| hospital | `agent:bb01ggxymm05` | 1.0.5 | 09:21 | `dep-cf00a39451224746830c99b8bac21e0b` | 1.0.4 |
+| hospital | `agent:bb01ggxymm05` | 1.0.6 | 09:26 | `dep-23e98e1ab0cb4e15ab67505ee0c87a17` | 1.0.5 (o 1.0.4, prima di MACH-1.3) |
 | specialist | `agent:sh35cbsy287d` | 1.0.4 | 02:57 | `dep-3bdea6595d254e1ebd423ca375e38ac4` | 1.0.3 |
 | family_counseling | `agent:nkh372rd16yq` | 1.0.8 | 03:53 | `dep-095cc796b9394679951c8376d4f09d6b` | 1.0.7 |
 
@@ -39,5 +39,6 @@ Chi rilascia aggiunge la riga **subito dopo** `city deploy` / `city rollback`, n
 | 21/11 04:43 | gp | 1.0.4 | deploy | — | `597c313` | red flag del livello 8 in altre parole (`225c3c1`) |
 | 21/11 07:29 | gp | 1.0.5 | deploy | — | `e439bcb` | world condiviso per ondata (`f72ce63`) |
 | 21/11 09:21 | hospital | 1.0.5 | deploy (Andrei) | `dep-cf00a39451224746830c99b8bac21e0b` | `653606b` | MACH-1.3 `earliest`/`deadline` (`b5dcb99`), orologio d'agenda estrapolato e minimo 10 ore (U 4) nelle offerte ai partner, `offer_id` letto sulla sua riga (#95). Conformance PASS. |
+| 21/11 09:26 | hospital | 1.0.6 | deploy (Andrei) | `dep-23e98e1ab0cb4e15ab67505ee0c87a17` | `612ad4d` | hold rifiutato dal Relay → `cancel`/`hold_refused` al CUP, history in errore non chiude il turno, log `care.hold` (#98). Conformance PASS. La 1.0.5 è rimasta online 5 minuti: i suoi effetti (offerte ai partner) si leggono insieme alla 1.0.6, che cambia solo il confirm. |
 
 Commit: per le righe fino alle 07:29 è il commit del bump della card (il codice rilasciato è quello del suo genitore su `main`); dalle prossime, lo SHA di `main` rilasciato. Le righe con «—» sono ricostruite dai commit: chi ha fatto quei deploy può completare il deployment.
