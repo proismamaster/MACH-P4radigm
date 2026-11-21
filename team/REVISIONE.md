@@ -30,7 +30,7 @@ Console 21/11 L7-L8: 319 confirm alle 04:17:06, risposta del CUP alle 04:21:05; 
 
 Causa più probabile, non confermata: i turni del CUP sono lunghi (attesa partner 20 s, attese del Ledger fino a 6 s, paging fino a 60 s) e il pod li serve in fila. Il CUP ha 5218 messaggi.
 
-Correzione proposta, già pronta (serve il tuo ok, il sistema l'ha bloccata): `city scale booking_centre --min 1 --max 1 --concurrency 8` (e lo stesso per `gp`). Un solo pod tiene la memoria condivisa; il codice ha già un lock per need.
+**Fatto alle 05:48** (approvato): `city scale booking_centre --min 1 --max 1 --concurrency 8` e lo stesso per `gp`. Per tornare indietro: `--concurrency 1`. Da verificare in console che il confirm venga elaborato in secondi. Un solo pod tiene la memoria condivisa; il codice ha già un lock per need.
 Correzione nel codice per le 10:00: un turno di `confirm` non deve aspettare partner o pagine; abbassare `_PAGING_SECONDS` a 20.
 
 ### 2.2 🟡 Strutture e finestra B dei CUP esterni
@@ -50,7 +50,7 @@ Coincide con l'orario di chiusura (08:00-18:00 d'agenda): vale per tutte le squa
 - Le soglie (20 ore d'agenda prima del CUP, 4 ore minime, 30 ore preferite) vengono dai dati di stanotte, non dal kit.
 
 ## 4. Piano per le 10:00 (dopo il freeze)
-1. Scale del CUP e del GP (se approvato) — subito, non è un deploy di codice.
+1. Controllare in console l'effetto dello scale (fatto alle 05:48) sui tempi del confirm.
 2. #86 di Andrei (impostori del CUP).
 3. Confirm del CUP senza attese lunghe; `_PAGING_SECONDS` 20.
 4. Consultorio e ospedale: rispettare `deadline=`/`after=` di MACH-1.3 e, per B, il primo slot dopo le 4 ore.
