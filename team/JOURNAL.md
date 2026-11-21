@@ -1,5 +1,18 @@
 # Journal (la voce più recente in alto)
 
+## 2026-11-21 01:28 — Abed — Vincoli combinati e alternative locali del CUP
+
+**Fatto**
+- Il CUP verifica insieme lingua, genere, giorno e finestra di priorità nelle offerte locali e dei partner. Legge `agenda_date` e `agenda_day` del Ledger e usa gli slot più recenti per pagina.
+- Se l'insieme è vuoto, prova un giorno diverso entro la stessa scadenza. Se serve proporre una data più lontana, la presenta come alternativa e conserva lingua, genere e regola della riserva urgente.
+- Nel caso 1630002, riprodotto con la frase di rifiuto vista in console, il CUP cerca un nuovo posto nella propria ASST. Il rifiuto resta valido nella pratica anche su messaggi ripetuti o consenso tardivo.
+
+**Problemi**
+- Il caso 183 fornisce il testo reale di una richiesta L5. I vincoli combinati e l'aggiornamento delle pagine sono verificati con il Ledger simulato.
+
+**Prossimo passo**
+- Review di Ismail e verifica in Arena dei vincoli combinati e del rifiuto cross-ASST dopo il rilascio.
+
 ## 2026-11-21 01:45 — Ismail (Opus) — Livello 4: partner dell'anello, alternativa rilassata, rifiuti del cittadino
 
 **Fatto**

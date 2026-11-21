@@ -103,10 +103,10 @@ check("rilassata: mai un medico che non parla la lingua (172)", got == [])
 
 print("CUP - partner dell'anello (Discord) oltre a city.find")
 got = cup._cup_partner_candidates([], "hospital.physiatry", {"agent:noi"}, "ur")
-check("city.find vuoto: scrive comunque ai partner noti", len(got) == 6)
+check("city.find vuoto: scrive comunque ai partner noti (8 ospedali nel ring)", len(got) == 8)
 check("prima il partner con l'h3 che parla la lingua (ur -> Nord)", got[0] == "agent:gpr1zqe343gb")
 got = cup._cup_partner_candidates(["agent:altro1", "agent:h6r1v45esk77"], "specialist_care.cardiology", {"agent:hnpe58epeyh1"}, "it")
-check("niente doppioni, mai le strutture locali, poi i risultati di find", got[5:] == ["agent:altro1", "agent:h6r1v45esk77"] and "agent:hnpe58epeyh1" not in got and len(got) == len(set(got)))
+check("niente doppioni, mai le strutture locali, poi i risultati di find", got[-2:] == ["agent:altro1", "agent:h6r1v45esk77"] and "agent:hnpe58epeyh1" not in got and len(got) == len(set(got)))
 
 print("CUP - MACH-1.1: date senza fuso, rifiuto del cittadino")
 naive = (f"offer offer_id=po-9 slot_id=S-6 doctor_id=asst-greco-h1 facility={PARTNER} procedure=VIS-FIS "
