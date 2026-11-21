@@ -21,7 +21,7 @@ from pathlib import Path
 from secrets import token_hex
 from time import monotonic
 
-from city_sdk.city import LEDGER, CapError, City, Message, Need, OutOfScope, clinical, understood
+from city_sdk.city import LEDGER, CapError, City, Message, Need, OutOfScope, Peer, clinical, understood
 
 ROLES = ("booking_centre", "gp", "hospital", "specialist_care", "family_counseling")
 # The catalogue is read one page at a time until a valid batch turns up: at most 20 pages and about
@@ -131,9 +131,36 @@ _CUP_RING = (
     ("tl", "", "agent:etpwrfmfa8hm"),                    # Isola (hospital id not published)
 )
 _CUP_RING_COLUMN = {"hospital.physiatry": 1, "specialist_care.cardiology": 2}
+_CUP_PARTNER_ROLES = {
+    "hospital.physiatry": {"hospital", "facility"},
+    "specialist_care.cardiology": {"specialist_care", "specialist", "facility"},
+}
 
 
-def _cup_partner_candidates(found: list[str], service: str, local: set[str], language: str) -> list[str]:
+def _cup_index_partners(peers: list[Peer], service: str, local: set[str]) -> tuple[list[str], set[str]]:
+    """Return eligible discoveries and explicit conflicts, including conflicting duplicate rows."""
+
+    roles = _CUP_PARTNER_ROLES[service]
+    compatible = []
+    incompatible = set()
+    for peer in peers:
+        agent = peer.agent_id
+        if agent in local or not agent.startswith("agent:") or not _CUP_TOKEN.fullmatch(agent):
+            continue
+        role = peer.role.strip().lower()
+        capabilities = {capability.strip() for capability in peer.capabilities if capability.strip()}
+        if (role and role not in roles) or (capabilities and service not in capabilities):
+            incompatible.add(agent)
+        elif service in capabilities:
+            compatible.append(peer)
+    candidates = [peer for peer in compatible if peer.agent_id not in incompatible]
+    # The SDK maps a missing no_clinical_advice field to False. Prefer declarations in a
+    # mixed Index result without treating missing metadata as a veto of a known route.
+    declared = [peer for peer in candidates if peer.no_clinical_advice]
+    return [peer.agent_id for peer in sorted(declared or candidates, key=lambda peer: -peer.reputation)], incompatible
+
+
+def _cup_partner_candidates(found: list[str], service: str, excluded: set[str], language: str) -> list[str]:
     """Known ring facilities first (the one whose h3 speaks the citizen's language at the top),
     then whatever city.find returned; never our own facilities."""
     column = _CUP_RING_COLUMN.get(service)
@@ -143,7 +170,7 @@ def _cup_partner_candidates(found: list[str], service: str, local: set[str], lan
     learned = list(_PARTNER_GOOD.get(service, {}))
     productive = [agent for agent in _CUP_PRODUCTIVE.get(service, ()) if agent in found]  # still in the Index
     ordered = dict.fromkeys([*speaker, *learned, *productive, *found, *known])
-    return [agent for agent in ordered if agent not in local and _CUP_TOKEN.fullmatch(agent)][:_CUP_MAX_PARTNERS]
+    return [agent for agent in ordered if agent not in excluded and _CUP_TOKEN.fullmatch(agent)][:_CUP_MAX_PARTNERS]
 
 _CUP_PARTNER_REPLY_SECONDS = 15
 _CUP_CONFIRM_WAIT = 180  # real seconds without receipt or cancel from the facility
@@ -1525,12 +1552,7 @@ async def _cup_cross_asst(
         except CapError:
             peers = []
         local = _cup_local_facilities(chat) | {city.agent_id}
-        found = [
-            peer.agent_id for peer in peers
-            # The Index reports facilities with their family as role ("hospital", "specialist"...),
-            # not "facility": filtering on role dropped all 26 peers (log cup.find, 00:44).
-            if service in peer.capabilities and peer.agent_id.startswith("agent:")
-        ]
+        found, incompatible = _cup_index_partners(peers, service, local)
         _LOG.warning(
             "cup.find need=%s service=%s peers=%d kept=%d sample=%s", message.need_id, service, len(peers), len(found),
             [(peer.agent_id, peer.role, list(peer.capabilities)[:3]) for peer in peers[:4]],
@@ -1540,7 +1562,7 @@ async def _cup_cross_asst(
         language, gender = _lang(chat, citizen), _gender(chat, citizen)
         # MACH-1.4 keeps the date and time window introduced in 1.3.
         window = f" mach=1.4 earliest={_utc(earliest)}" + (f" deadline={_utc(until)}" if until else "")
-        for partner in _cup_partner_candidates(found, service, local, language):
+        for partner in _cup_partner_candidates(found, service, local | incompatible, language):
             request_id = f"rq-{token_hex(8)}"
             search = f"need.request service_type={service} procedure={procedure} priority={priority} request_id={request_id}"
             if language != "it":
