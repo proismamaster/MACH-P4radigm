@@ -22,6 +22,17 @@ Aggiorna la tua riga quando cambi stato. Un compito tocca solo i file indicati.
 | Pitch e vision 2027 | Ettore | `team/pitch.md` | in corso | — | sabato 14:00 |
 | Merge delle PR e decisioni | Andrei | tutto (solo merge) | dall'1:00 | — | — |
 
+## Fase 5 (dalle 01:30 del 21/11) — capo: Ismail. Deploy: solo Claude sul PC di Ismail
+
+Livello 5 «Vincoli combinati»: priorità, lingue e disponibilità si sovrappongono. Online: CUP 1.0.8, GP 1.0.3, consultorio 1.0.1, specialist 1.0.2, ospedale 1.0.0.
+
+| Compito | Chi | File che può toccare | Stato | Branch / PR |
+|---|---|---|---|---|
+| CUP L5: vincoli combinati (lingua + genere + giorni + priorità) dentro la finestra; insieme vuoto = alternativa rilassata sui giorni; dopo `consent_declined` offrire un posto della nostra ASST | Abed | `asst/booking_centre/`, `tools/test_cup_*.py` | da fare | `abed/cup-l5` |
+| Ospedale: doppio commit sullo stesso slot (069, 099: commit, poi ricevuta e annullamento) con la riproduzione del Ledger simulato | Andrei | `asst/hospital/`, `tools/test_facility.py` | da fare | `andrei/hospital-doppio-commit` |
+| Console: ogni 20 minuti tabella dei percorsi falliti e aperti del livello 5 (need_id, agente, causa, testo vero) in `team/PROBLEMS.md` | Sonnet (PC di Ismail) | `team/PROBLEMS.md` | da fare | `sonnet/console-l5` |
+| Deploy, review delle PR, specialist follow-up | Claude (Opus) | `asst/specialist/`, card | in corso | — |
+
 ## Deploy
 
 Fino all'1:00 pubblicano solo Abed o Ismail, nelle finestre di Down, un agente alla volta, annunciando nel gruppo. Procedura in `AI.md`.
