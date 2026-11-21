@@ -194,10 +194,10 @@ check("5 minuti reali dopo la lettura: agenda + 5 ore", got == datetime(2026, 11
 print("CUP - livello 6: annullamento della struttura dopo la ricevuta")
 rec = Message(type="chat", sender=CUP_ID, recipient=CIT, msg_id="r1", need_id="N-1",
               body={"text": "booking.receipt booking_id=bk-1 ledger_ref=L-1"})
-check("dopo la ricevuta il caso e' chiuso", cup._cup_case([offer_msg, rec], CUP_ID, CIT).booked)
+check("dopo la ricevuta il caso e' chiuso", cup._cup_case([offer_msg, rec], CUP_ID, CIT).receipt == rec)
 can = Message(type="chat", sender=CUP_ID, recipient=CIT, msg_id="c9", need_id="N-1",
               body={"text": "cancel booking_id=bk-1 slot_id=S-1 reason=facility_cancelled"})
-check("dopo il nostro cancel facility_cancelled il caso si riapre", not cup._cup_case([offer_msg, rec, can], CUP_ID, CIT).booked)
+check("dopo il nostro cancel facility_cancelled il caso si riapre", cup._cup_case([offer_msg, rec, can], CUP_ID, CIT).receipt is None)
 
 print("FALLITE:", FAILS if FAILS else "nessuna")
 sys.exit(1 if FAILS else 0)

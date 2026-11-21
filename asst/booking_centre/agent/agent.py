@@ -653,7 +653,7 @@ def _withdrawn(chat: list[Message], agent: str) -> set[str]:
             confirmed_slots[number] = slot
         slot = None
         if act == "cancel":
-            slot = by_offer.get(fields.get("offer_id", ""))
+            slot = fields.get("slot_id") if fields.get("booking_id") else by_offer.get(fields.get("offer_id", ""))
         elif act == "data.request" and fields.get("purpose") == "prescription_renewal":
             slot = confirmed_slots.get(number)
         if slot:
@@ -892,7 +892,7 @@ class _CupCase:
     cancellation: Message | None = None
     renewal_request: Message | None = None
     expired_prescriptions: set[str] = field(default_factory=set)
-    booked: bool = False
+    receipt: Message | None = None
 
 
 def _cup_case(chat: list[Message], agent: str, citizen: str) -> _CupCase:
@@ -934,7 +934,7 @@ def _cup_case(chat: list[Message], agent: str, citizen: str) -> _CupCase:
                 state.cross_consent_request = None
                 state.confirmation = None
                 state.cancellation = row
-                state.booked = False  # our cancel after a receipt (level 6): the case is open again
+                state.receipt = None
                 if fields.get("reason") == "consent_declined":
                     state.cross_asst_declined = True
             elif act == "data.request" and fields.get("purpose") == "prescription_renewal":
@@ -949,24 +949,25 @@ def _cup_case(chat: list[Message], agent: str, citizen: str) -> _CupCase:
                 if fields.get("offer_id") in state.offers:
                     state.cross_consent_request = row
             elif act == "booking.receipt" and fields.get("booking_id") and fields.get("ledger_ref"):
-                state.booked = True
+                state.receipt = row
         elif act == "confirm" and fields.get("citizen") == citizen and row.recipient.startswith("agent:"):
             state.confirmation = row
     return state
 
 
-def _cup_input(message: Message) -> tuple[str, dict[str, str]]:
+def _cup_input(message: Message, *, first_line: bool = False) -> tuple[str, dict[str, str]]:
     if message.type != "chat":
         return message.type, {
             key: value for key, value in message.body.items()
             if isinstance(value, str) and value and not any(char.isspace() for char in value)
         }
-    acts = words(message.text) & {"confirm", "booking.receipt", "cancel", "consent", "data.response", "refused", "hold_refused"}
+    text = message.text.partition("\n")[0] if first_line else message.text
+    acts = words(text) & {"confirm", "booking.receipt", "cancel", "consent", "data.response", "refused", "hold_refused"}
     if len(acts) > 1:
         return "", {}
-    act = next(iter(acts), first_word(message.text))
+    act = next(iter(acts), first_word(text))
     fields: dict[str, str] = {}
-    for token in message.text.replace(",", " ").split():
+    for token in text.replace(",", " ").split():
         key, equals, value = token.partition("=")
         if not equals:
             continue
@@ -1016,6 +1017,35 @@ def _cup_history(chat: list[Message], cache: _Sent, agent: str, need_id: str) ->
     return merged
 
 
+def _cup_cancelled_booking(message: Message, receipt: Message, confirmation: Message) -> tuple[str, str] | None:
+    # A facility may attach new offers below the cancellation, with different slot and offer IDs.
+    if message.type == "chat":
+        act, fields = _cup_input(message, first_line=True)
+        if act != first_word(message.text):
+            return None
+    else:
+        act, fields = message.type, message.body
+    city_fault = message.sender.startswith("city:") and act in {"fault.cancel", "booking.cancelled"}
+    facility_cancel = message.sender == confirmation.recipient and act == "cancel"
+    if not (city_fault or facility_cancel):
+        return None
+    if not fields.get("booking_id") and not (city_fault and fields.get("slot_id")):
+        return None  # A facility's pre-commit refusals carry an offer or a slot, but no booking ID.
+    booked = fields_of(receipt.text)
+    confirmed = fields_of(confirmation.text)
+    if not (slot := confirmed.get("slot_id")):
+        return None
+    expected = {
+        "booking_id": booked["booking_id"], "ledger_ref": booked["ledger_ref"],
+        "slot_id": slot, "facility": confirmation.recipient, "citizen": receipt.recipient,
+        "offer_id": confirmed.get("offer_id"), "cup_offer_id": confirmed.get("cup_offer_id"),
+        "request_id": confirmed.get("request_id"), "prescription_number": confirmed.get("prescription_number"),
+    }
+    if any(key in fields and fields[key] != value for key, value in expected.items()):
+        return None
+    return booked["booking_id"], slot
+
+
 async def _booking_centre(city: City, message: Message, chat: list[Message]) -> None:
     if message.sender == city.agent_id or not message.need_id:
         return
@@ -1030,29 +1060,16 @@ async def _booking_centre(city: City, message: Message, chat: list[Message]) -> 
     chat = _shared_reads(chat, citizen, None)  # the agenda clock, for the confirm check too
 
     state = _cup_case(chat, city.agent_id, citizen)
-    act, fields = _cup_input(message)
-    if state.booked:
-        # Level 6: a facility (or the city) cancels a booking we already confirmed to the citizen.
-        # Tell the citizen and search again inside the priority window, instead of staying silent.
-        if message.sender != citizen and ("cancel" in words(message.text) or "fault.cancel" in words(message.text)):
-            receipts = [row for row in chat if row.sender == city.agent_id and row.recipient == citizen
-                        and first_word(row.text) == "booking.receipt"]
-            booking_id = fields_of(receipts[-1].text).get("booking_id", "") if receipts else ""
-            confirmations = [row for row in chat if row.sender == city.agent_id and first_word(row.text) == "confirm"]
-            confirmed = fields_of(confirmations[-1].text) if confirmations else {}
-            ours = (
-                (booking_id and fields.get("booking_id") == booking_id)
-                or (confirmed.get("slot_id") and fields.get("slot_id") == confirmed.get("slot_id"))
-                or (confirmations and message.sender == confirmations[-1].recipient)
+    if state.receipt is not None:
+        if state.confirmation and (cancelled := _cup_cancelled_booking(message, state.receipt, state.confirmation)):
+            booking_id, slot = cancelled
+            await _cup_cancel(
+                city, message, chat, cache, citizen,
+                f"cancel booking_id={booking_id} slot_id={slot} reason=facility_cancelled "
+                "La struttura ha annullato la visita. Cerco subito un altro orario per lei.",
             )
-            if ours and not _we(chat, city.agent_id, "reason=facility_cancelled", to=citizen, word="cancel"):
-                slot = confirmed.get("slot_id", "")
-                await _cup_cancel(
-                    city, message, chat, cache, citizen,
-                    f"cancel booking_id={booking_id} slot_id={slot} reason=facility_cancelled "
-                    "La struttura ha annullato la visita. Cerco subito un altro orario per lei.",
-                )
         return
+    act, fields = _cup_input(message)
     pending = state.confirmation
     number = _cup_number(chat, citizen, state.expired_prescriptions)
     if pending is not None:

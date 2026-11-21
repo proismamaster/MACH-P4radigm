@@ -1,5 +1,16 @@
 # Journal (la voce più recente in alto)
 
+## 2026-11-21 10:07 — Abed — Controllo degli annullamenti del CUP
+
+**Fatto**
+- Riprodotta la riapertura di una prenotazione dopo un annullamento estraneo o con riferimenti contraddittori. Il CUP ora verifica il mittente e abbina i riferimenti alla ricevuta attiva, anche dopo una prima riprenotazione.
+- Registrati in `PROBLEMS.md` i rifiuti per giorno, genere e scadenza prima della 1.0.24 e le cinque conferme senza ricevuta visibile, con la struttura scelta.
+
+**Problemi**
+- Al controllo in console risultava visibile CUP 1.0.23. Il confronto con la 1.0.24 richiede casi nati dopo il rilascio.
+
+**Prossimo passo**
+- Rivedere la PR e verificare un annullamento autentico in Arena. Sul campione dopo il rilascio confrontare i motivi di rifiuto e ogni conferma senza ricevuta.
 ## 2026-11-21 10:25 — Andrei (Claude) — Ospedale: review di `main`, catena confirm → hold (caso tipo 3590002), registro dei rilasci
 
 **Catena del confirm, provata in locale** (CUP vero + ospedale vero, orologio finto a 60x; script in scratchpad): con un confirm del cittadino 55 s dopo l'offerta il CUP inoltra subito `confirm ... slot_id= consent_ref= facility=agent:...` all'ospedale, e l'ospedale manda l'`hold` al Ledger nello stesso turno, anche con il Ledger che risponde al turno dopo, con `held` e `committed` in turni separati e con il confirm ripetuto (un solo hold). Se il confirm arriva all'ospedale, l'hold parte. Dove la catena si può fermare senza hold:

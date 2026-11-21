@@ -54,7 +54,8 @@ Livello 5 «Vincoli combinati»: priorità, lingue e disponibilità si sovrappon
 | MACH-1.3: finestra `earliest=`/`deadline=` in consultorio e ospedale, R7 al confirm, token nelle ricerche del CUP | in `main`, alle 10:00 (ospedale 1.0.5, consultorio 1.0.9, CUP 1.0.24) | `b5dcb99` |
 | Anticipo minimo 10 ore (U 4), margine 1 ora al confirm, simulazione dei percorsi | in `main`, alle 10:00 | `e2d1518` |
 | Ritardo del Ledger: letture condivise per ondata, richieste in parallelo, al massimo 6 partner | GP online 1.0.5 (08:29); CUP e consultorio alle 10:00 | `f72ce63` |
-| Console dalle 10:15: tempi GP e CUP, ricerche ai partner, `past`/`EXPIRED`, ricevute | da fare | — |
+| Console dopo il rilascio: tempi GP e CUP, ricerche ai partner, `day`/`gender`/`past`/`deadline`, ricevute | Abed: dati precedenti al rilascio registrati; campione successivo da raccogliere | `abed/cup-verifica-annullamenti` |
+| CUP: verificare il mittente e i riferimenti degli annullamenti dopo la ricevuta | Abed: testato in locale, in revisione | PR #93 · `abed/cup-verifica-annullamenti` |
 | Verdetto di cardiologia con le righe dello specialist (per il follow-up) | da cercare in console | — |
 | Riga `facts` MACH-1.3 per le nostre strutture su Discord | Alberto | — |
 

@@ -1,6 +1,12 @@
 
 # Problemi
 
+## CUP, campione precedente al rilascio della 1.0.24 (21/11)
+
+- Nei 39 export di percorsi falliti, i rifiuti del cittadino compaiono in 14 percorsi per `day`, 13 per `gender`, 11 per `deadline` e 1 per `past`. Le categorie si sovrappongono. Sono conteggi tra i falliti esportati e non misurano il tasso di errore della wave.
+- I percorsi `N-2026-11-02-8909110003550003` e `N-2026-11-02-8909110003030004` hanno rifiutato per `deadline` tutte e tre le offerte per lo stesso giorno in fisiatria. Al controllo in console il CUP risultava ancora alla 1.0.23.
+- Conferma senza ricevuta o annullamento visibile: **Ospedale Bicocca** `N-2026-11-02-8909110001220010`, `N-2026-11-02-8909110002990004`, `N-2026-11-02-8909110003590002`, `N-2026-11-02-8909110003610002`. In `3590002` la prima conferma arriva 55 secondi dopo l'offerta e il verdetto non registra un hold. **Specialista Bicocca** `N-2026-11-02-8909110002840005`: il verdetto registra un hold scaduto senza commit. Per stabilire il passaggio mancante vanno incrociati i log del CUP, della struttura e del Ledger per lo stesso need.
+
 ## Verdetti delle 06:00-08:38 (console, 200 percorsi, 99 chiusi letti uno per uno)
 
 **1. Cardiologia con le righe dello specialist** (per il follow-up chiesto da Andrei). Percorso `N-2026-11-02-8909110001820005`, L4, `done`, punteggio +3:
