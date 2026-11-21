@@ -41,7 +41,7 @@ Livello 5 «Vincoli combinati»: priorità, lingue e disponibilità si sovrappon
 |---|---|---|
 | Consultorio: L6-L8, trust ring (modalità sicura), conformance, riprova del hold, scadenze in giorni di agenda | online 1.0.7, in `main` | `hapca/consultorio-riprova-hold`, `hapca/trust-ring` |
 | CUP: orologio, paging, anticipo minimo, cancel con id, rifiuti day/gender | online (CUP 1.0.21-1.0.23) | `hapca/cup-orologio`, `-pagine`, `-lead`, `-deadline`, `-rifiuti-day-gender` |
-| CUP: partner incompatibili e scadenza delle alternative | in revisione | `abed/cup-partner-verificati` (integra la #86) |
+| CUP: partner incompatibili e scadenza delle alternative | in revisione | `abed/cup-partner-verificati` (PR #118, integra la #86) |
 | Ospedale e specialist: riprova su `EXPIRED`/`STALE_FENCE` | solo se i messaggi del Ledger lo confermano | — |
 
 ## Da solo (21/11 04:30-08:40) — Alberto con Claude, su tutti gli agenti
