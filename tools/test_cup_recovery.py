@@ -16,7 +16,7 @@ from itertools import count
 from pathlib import Path
 from unittest.mock import patch
 
-from city_sdk.city import LEDGER, City, Message, Need, Peer, understood
+from city_sdk.city import LEDGER, CapError, City, Message, Need, Peer, understood
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,6 +31,8 @@ PROCEDURE = "VIS-FIS"
 APPOINTMENT = "2026-11-23T13:00:00+01:00"
 LATER_APPOINTMENT = "2026-11-23T14:00:00+01:00"
 CROSS_REF = "cons-42-cross_asst"
+# Plain refusal from Arena retry 1630002, after the cross_asst consent prompt.
+CROSS_REFUSAL = "Ho il cuore che mi batte forte, sono preoccupato, ma preferirei non condividere troppi dati."
 PARTNER_OFFER = "of-S-EXT"
 PARTNER_SLOT = "S-EXT"
 LATER_PARTNER_SLOT = "S-EXT-LATER"
@@ -71,7 +73,7 @@ class Case:
     async def search(self, query):
         return [
             Peer(HOSPITAL, role="facility", district=4, capabilities=(SERVICE,)),
-            Peer(PARTNER, role="facility", district=6, capabilities=(SERVICE,)),
+            Peer(PARTNER, role="hospital", district=6, capabilities=(SERVICE,)),  # as the live Index reports it
         ]
 
     async def post(self, *, to, message_type, body, need_id, conversation_id, traceparent=None):
@@ -109,8 +111,8 @@ class Case:
             conversation="ledger",
         )
 
-    async def open(self, local_free, *, second_local_slot=False):
-        request = self.add(CITIZEN, f"need.request prescription_number={OLD_RX} lang=it")
+    async def open(self, local_free, *, second_local_slot=False, preferences="lang=it"):
+        request = self.add(CITIZEN, f"need.request prescription_number={OLD_RX} {preferences}")
         self.rx_reply(OLD_RX)
         self.add(LEDGER, "agenda agenda_now=2026-11-23T07:00:00+01:00", conversation="ledger")
         slots = (
@@ -138,8 +140,8 @@ class Case:
         await self.turn(self.add(CITIZEN, f"confirm offer_id={offer_id} consent_ref=cons-42-booking"))
         return offer_id
 
-    async def receive_remote_offer(self, *, second_partner_slot=False):
-        await self.open(local_free=0)
+    async def receive_remote_offer(self, *, second_partner_slot=False, preferences="lang=it"):
+        await self.open(local_free=0, preferences=preferences)
         (request,) = self.out(PARTNER, "need.request")
         request_id = understood(request).body["request_id"]
 
@@ -157,8 +159,8 @@ class Case:
         await self.turn(self.add(PARTNER, options, conversation="partner"))
         return request_id
 
-    async def reach_remote_consent(self, *, second_partner_slot=False):
-        request_id = await self.receive_remote_offer(second_partner_slot=second_partner_slot)
+    async def reach_remote_consent(self, *, second_partner_slot=False, preferences="lang=it"):
+        request_id = await self.receive_remote_offer(second_partner_slot=second_partner_slot, preferences=preferences)
         offer_id = await self.accept_offer()
         (prompt,) = self.out(CITIZEN, "consent")
         assert understood(prompt).body["purpose"] == "cross_asst"
@@ -251,6 +253,8 @@ class CupRecoveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_cross_asst_accepts_consent_after_natural_language_preamble(self):
         case = Case(self.brain, "consent-preamble")
         await case.reach_remote_consent()
+        await case.turn(case.add(CITIZEN, f"need.request prescription_number={OLD_RX} lang=it"))
+        self.assertEqual(case.out(CITIZEN, "cancel"), [], "Retrying the booking request is not a refusal")
         await case.turn(case.add(
             CITIZEN, f"Certo, va bene. consent purpose=cross_asst consent_ref={CROSS_REF}"
         ))
@@ -258,6 +262,70 @@ class CupRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(confirmations), 1, "The consent act need not be the first word")
         self.assertEqual(understood(confirmations[0]).body["consent_ref"], CROSS_REF)
         self.assertEqual(case.out(CITIZEN, "cancel"), [])
+
+    async def test_cross_asst_refusal_immediately_offers_verified_local_slot(self):
+        for relaxed in (False, True):
+            with self.subTest(outside_priority_window=relaxed):
+                case = Case(self.brain, f"1630002-consent-refusal-local-{relaxed}")
+                offer_id, _ = await case.reach_remote_consent(preferences="lang=en gender_preference=f")
+                await case.turn(case.add(
+                    CITIZEN, f"consent purpose=report_sharing consent_ref={CROSS_REF} offer_id={offer_id}",
+                ))
+                await case.turn(case.add(
+                    CITIZEN, f"consent purpose=cross_asst consent_ref={CROSS_REF} offer_id=of-wrong",
+                ))
+                self.assertEqual(case.out(CITIZEN, "cancel"), [])
+                self.assertEqual(case.out(PARTNER, "confirm"), [])
+
+                slot_at = "2026-11-30T13:00:00+01:00" if relaxed else LATER_APPOINTMENT
+                case.add(
+                    LEDGER,
+                    f"slots page=1/1\nslot_id=S-LOCAL-FREE doctor_id=doctor-h1 facility={HOSPITAL} "
+                    f"procedure={PROCEDURE} at={slot_at} day=mon free=1\n"
+                    f"slot_id=S-LOCAL-WRONG doctor_id=doctor-h3 facility={HOSPITAL} "
+                    f"procedure={PROCEDURE} at=2026-11-24T13:00:00+01:00 day=tue free=1",
+                    conversation="ledger",
+                )
+                await case.turn(case.add(CITIZEN, CROSS_REFUSAL))
+                self.assertEqual(len(case.out(CITIZEN, "offer")), 2, "The refusal must immediately restart the local search")
+                (local_offer,) = case.choices()
+                self.assertEqual(local_offer["slot_id"], "S-LOCAL-FREE")
+                self.assertEqual(local_offer["facility"], HOSPITAL)
+                self.assertEqual(local_offer.get("relaxed"), True if relaxed else None)
+                self.assertEqual(case.out(HOSPITAL, "confirm"), [], "A local offer still needs a citizen confirmation")
+
+                await case.turn(case.add(
+                    CITIZEN, f"consent purpose=cross_asst consent_ref={CROSS_REF} offer_id={offer_id}",
+                ))
+                self.assertEqual(case.out(PARTNER, "confirm"), [])
+                await case.accept_offer()
+                (confirmation,) = case.out(HOSPITAL, "confirm")
+                self.assertEqual(understood(confirmation).body["slot_id"], "S-LOCAL-FREE")
+
+    async def test_cross_asst_refusal_does_not_resurface_partner_offers(self):
+        case = Case(self.brain, "consent-refusal-no-local-slot")
+        partner_choice, _ = await case.reach_remote_consent(second_partner_slot=True)
+        search_count = len(case.out(PARTNER, "need.request"))
+
+        await case.turn(case.add(CITIZEN, CROSS_REFUSAL))
+        await case.turn(case.add(CITIZEN, CROSS_REFUSAL))
+        await case.turn(case.add(CITIZEN, f"confirm offer_id={partner_choice} consent_ref=cons-42-booking"))
+        self.assertEqual(len(case.out(CITIZEN, "consent")), 1)
+        self.assertEqual(len(case.out(PARTNER, "need.request")), search_count)
+        self.assertEqual(len(case.out(CITIZEN, "offer")), 1, "After the refusal, no more partner offers")
+        self.assertEqual(case.out(PARTNER, "confirm"), [])
+
+    async def test_cross_asst_refusal_blocks_late_consent_if_acknowledgment_cannot_be_sent(self):
+        case = Case(self.brain, "consent-refusal-ack-unavailable")
+        offer_id, _ = await case.reach_remote_consent()
+        with patch.object(case, "post", side_effect=CapError("UPSTREAM_TIMEOUT")):
+            await case.turn(case.add(CITIZEN, CROSS_REFUSAL))
+        self.assertEqual(case.out(CITIZEN, "cancel"), [])
+
+        await case.turn(case.add(
+            CITIZEN, f"consent purpose=cross_asst consent_ref={CROSS_REF} offer_id={offer_id}",
+        ))
+        self.assertEqual(case.out(PARTNER, "confirm"), [], "The refusal was recorded even when its reply could not be sent")
 
     async def test_cross_asst_declined_offer_does_not_accept_late_confirmation(self):
         for hidden in (False, True):

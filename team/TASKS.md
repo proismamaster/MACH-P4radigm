@@ -30,6 +30,8 @@ Livello 5 «Vincoli combinati»: priorità, lingue e disponibilità si sovrappon
 |---|---|---|---|---|
 | CUP L5: vincoli combinati (lingua + genere + giorni + priorità) dentro la finestra; insieme vuoto = alternativa rilassata sui giorni; dopo `consent_declined` offrire un posto della nostra ASST | Abed | `asst/booking_centre/`, `tools/test_cup_*.py` | da fare | `abed/cup-l5` |
 | Ospedale: doppio commit sullo stesso slot (069, 099: commit, poi ricevuta e annullamento) con la riproduzione del Ledger simulato | Andrei | `asst/hospital/`, `tools/test_facility.py` | PR aperta, test verdi (prova D), da pubblicare | `andrei/hospital-doppio-commit` |
+| CUP L5: vincoli combinati (lingua + genere + giorni + priorità) dentro la finestra; insieme vuoto = alternativa rilassata sui giorni; dopo `consent_declined` offrire un posto della nostra ASST | Abed | `asst/booking_centre/`, `tools/test_cup_*.py` | verificato in locale, in revisione | PR #42 · `abed/cup-l5` |
+| Ospedale: doppio commit sullo stesso slot (069, 099: commit, poi ricevuta e annullamento) con la riproduzione del Ledger simulato | Andrei | `asst/hospital/`, `tools/test_facility.py` | da fare | `andrei/hospital-doppio-commit` |
 | Console: ogni 20 minuti tabella dei percorsi falliti e aperti del livello 5 (need_id, agente, causa, testo vero) in `team/PROBLEMS.md` | Sonnet (PC di Ismail) | `team/PROBLEMS.md` | da fare | `sonnet/console-l5` |
 | Deploy, review delle PR, specialist follow-up | Claude (Opus) | `asst/specialist/`, card | in corso | — |
 
