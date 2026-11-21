@@ -45,9 +45,10 @@ class AgendaDeadlineTests(unittest.TestCase):
     def check(self, fn):
         # Giovedì 19 + 2 giorni di agenda = lunedì 23.
         self.assertEqual(fn("B", now(19), line("fri", "20T14:30"), line("mon", "23T07:00")), ["fri", "mon"])
-        # Venerdì 20 + 2 = martedì 24 alle 08:00.
+        # Venerdì 20 + 2 = martedì 24 alle 08:00. Martedì è oltre le 30 ore d'agenda (il weekend non
+        # conta), lunedì no: martedì viene prima.
         self.assertEqual(fn("B", now(20), line("mon", "23T10:00"), line("tue", "24T07:00"),
-                            line("late", "24T09:00")), ["mon", "tue"])
+                            line("late", "24T09:00")), ["tue", "mon"])
         # D di giovedì 19 = giovedì 26 alle 08:00: mercoledì 25 sì, giovedì 26 alle 10:00 no.
         self.assertEqual(fn("D", now(19), line("wed", "25T10:00"), line("next", "26T10:00")), ["wed"])
         # Mercoledì 25 + 2 = venerdì 27: nessun fine settimana in mezzo, come prima.

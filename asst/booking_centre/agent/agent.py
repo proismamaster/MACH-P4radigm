@@ -28,11 +28,11 @@ ROLES = ("booking_centre", "gp", "hospital", "specialist_care", "family_counseli
 # 60 real seconds per need (a valid slot on page 9 was never read when the cap was 8).
 _MAX_PAGE = 20
 _PAGING_SECONDS = 60.0
-# Four agenda hours is about half a minute of real time at 480x, so a slot is still
-# ahead when the citizen decides: it is the PREFERRED lead, slots nearer than that come last. One
-# hour is the minimum: hold and commit take real time and an earlier slot expires before check-in.
-_LEAD = timedelta(hours=4)
-_MIN_LEAD = timedelta(hours=1)
+# One real minute is one agenda hour and a citizen answers after 3-27 minutes (console 21/11): a slot a few
+# hours ahead is already past when it decides (`reason=past`, Ledger `EXPIRED`). Slots at least _LEAD ahead
+# in agenda time come first, then the ones at least _MIN_LEAD ahead; nearer ones are never offered.
+_LEAD = timedelta(hours=30)
+_MIN_LEAD = timedelta(hours=4)
 # Doctor key (the last segment of doctor_id) -> languages, gender, days. ``*`` is the ASST's
 # rare language. The Ledger's slot line names the doctor; it does not repeat this table.
 _OWN_RARE_LANGUAGE = "ti"
@@ -400,6 +400,18 @@ def _speaks(doctor_id: str, lang: str) -> bool:
     return "*" in langs and lang == _OWN_RARE_LANGUAGE
 
 
+def _ahead(now: datetime, at: datetime) -> timedelta:
+    """Agenda time from ``now`` to ``at``: Saturday and Sunday do not exist in the agenda, so the
+    days between do not count (Friday 17:00 to Monday 10:30 is 17 hours and a half)."""
+    at = at.astimezone(now.tzinfo)
+    gap, day = at - now, now.date()
+    for _ in range(max((at.date() - day).days - 1, 0)):
+        day += timedelta(days=1)
+        if day.weekday() >= 5:
+            gap -= timedelta(days=1)
+    return gap
+
+
 def fitting(
     lines: list[str],
     *,
@@ -459,7 +471,7 @@ def fitting(
         if gender and spec[1] != gender:
             continue
         chosen.append((at, slot))
-    chosen.sort(key=lambda item: (item[0] < now + _LEAD, item[0], item[1].get("slot_id", "")))
+    chosen.sort(key=lambda item: (_ahead(now, item[0]) < _LEAD, item[0], item[1].get("slot_id", "")))
     return [slot for _, slot in chosen]
 
 
@@ -1269,7 +1281,7 @@ def _cup_partner_slots(
                 "expiry": fields.get("expiry") or fields["agenda_date"], "partner_offer_id": offer_id, "request_id": request_id,
             }
     ordered = sorted(
-        slots.values(), key=lambda slot: (_when(slot["at"]) < now + _LEAD, _when(slot["at"]), slot["slot_id"])
+        slots.values(), key=lambda slot: (_ahead(now, _when(slot["at"])) < _LEAD, _when(slot["at"]), slot["slot_id"])
     )
     return ordered, answered
 
