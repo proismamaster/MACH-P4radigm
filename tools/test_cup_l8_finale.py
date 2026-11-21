@@ -55,7 +55,7 @@ check("B: 02/12 10:30 si', 03/12 10:30 no (oltre la scadenza vera)", got == ["we
 rows = [line("wed-1430", "2026-12-02T14:30:00.000Z", "wed"), line("wed-1030", "2026-12-02T10:30:00.000Z", "wed")]
 got = [s["slot_id"] for s in cup.fitting(rows, now=NOW, priority="B", lang="it", procedure="VIS-CARD")]
 check("B: il piu' vicino oltre le 10 ore viene prima", got == ["wed-1030", "wed-1430"])
-check("D: resta la preferenza per le 30 ore; B preferisce gli slot a 20 ore (conferma dopo 19 ore)", cup._lead("D") == cup._LEAD and cup._lead("B") == cup._B_LEAD)
+check("D: resta la preferenza per le 30 ore; B il primo slot oltre il minimo (la #119 a 20 ore e' stata tolta)", cup._lead("D") == cup._LEAD and cup._lead("B") == cup._MIN_LEAD)
 
 print("Date dei partner in UTC")
 PARTNER = "agent:altra/hospital"
