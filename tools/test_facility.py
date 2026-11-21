@@ -45,6 +45,7 @@ def load(cap: str, aid: str):
     spec.loader.exec_module(mod)
     mod._PULL_TRIES = 1  # niente attese: le risposte del Ledger arrivano al turno successivo
     mod._WAIT_SECONDS = 0.0  # idem per l'attesa paziente del consultorio (hold, commit, prime offerte)
+    mod._RX_WAIT = 0.0  # idem per l'attesa del prescribed nel GP
     return mod
 
 
