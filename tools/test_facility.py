@@ -857,10 +857,141 @@ async def prova_n() -> None:
           not h.out(CUP_OWN, "cancel") and not h.out(CUP_OWN, "hold_refused"), h)
 
 
+def first_word(text: str) -> str:
+    return text.split()[0] if text.split() else ""
+
+
+async def prova_o() -> None:
+    """Consultorio, caso 3290004 (triage 21/11): dopo NO_CAPACITY su uno slot, le nuove offerte al
+    cittadino non devono riproporre lo stesso slot (PROBLEMS, causa 5: 050002 riceveva di nuovo il 10:30).
+    Il rifiuto arriva come riga `refused hold` del Ledger oppure subito dal Relay (CapError)."""
+
+    print("Prova O - consultorio: dopo NO_CAPACITY lo stesso slot non torna nelle offerte")
+    rows = [
+        "slot_id=C-1 doctor_id=D-zz9 facility=ME procedure=CONS-GIN at=2026-11-24T09:00:00+01:00 day=tue free=1",
+        "slot_id=C-2 doctor_id=D-zz9 facility=ME procedure=CONS-GIN at=2026-11-24T10:30:00+01:00 day=tue free=1",
+        "slot_id=C-3 doctor_id=D-zz9 facility=ME procedure=CONS-GIN at=2026-11-25T09:00:00+01:00 day=wed free=1",
+    ]
+    for label, world, port in (
+        ("rifiuto del Ledger (refused hold)", World(FC, {"CONS-GIN:1": slots_reply(FC, rows)}, refuse={"hold": "NO_CAPACITY"}), None),
+        ("rifiuto del Relay (CapError)", World(FC, {"CONS-GIN:1": slots_reply(FC, rows)}), FlakyPort(FC, hold_error="NO_CAPACITY")),
+    ):
+        h = Harness("family_counseling.gynecology", FC, world)
+        if port is not None:
+            h.port = port
+        await h.turn(CIT2, "vorrei una visita ginecologica")
+        first = h.out(CIT2, "offer")
+        oid = next((w.split("=", 1)[1] for t in first for line in t.splitlines() if "slot_id=C-1" in line
+                    for w in line.split() if w.startswith("offer_id=")), "of-C-1")
+        before = len(h.out(CIT2))
+        await h.turn(CIT2, f"confirm offer_id={oid} consent_ref=cons-N-booking")
+        after = h.out(CIT2)[before:]
+        again = [line for t in after for line in t.splitlines() if first_word(line) == "offer"]
+        told = any("cancel" in t.split()[0] for t in after)
+        check(f"{label}: il cittadino sa del rifiuto e C-1 non e' riofferto",
+              told and not any("slot_id=C-1" in line.split() for line in again), h)
+
+
+class LatePort(Port):
+    """Il Relay vero (misure di Alberto, PROBLEMS 21/11): la risposta del Ledger e' nella cronologia
+    dopo qualche lettura, mentre il push che apre il turno arriva 60-90 s piu' tardi (qui: mai)."""
+
+    def __init__(self, me: str, world: World, reads: int = 3) -> None:
+        super().__init__(me)
+        self.world, self.reads, self.pending = world, reads, []
+
+    async def post(self, *, to, message_type, body, need_id, conversation_id, traceparent):
+        mid = await super().post(to=to, message_type=message_type, body=body, need_id=need_id,
+                                 conversation_id=conversation_id, traceparent=traceparent)
+        if to == LEDGER:
+            reply = self.world.answer(body.get("text", ""))
+            if reply is not None:
+                self.pending.append([self.reads, reply, need_id])
+        return mid
+
+    async def history(self, *, peer=None, need_id=None):
+        for item in self.pending:
+            item[0] -= 1
+        for item in [i for i in self.pending if i[0] <= 0]:
+            self.pending.remove(item)
+            self.log.append(Message(type="chat", sender=LEDGER, recipient=self.me, msg_id=uuid4().hex,
+                                    need_id=item[2], conversation_id="c-ledger", body={"text": item[1]}))
+        return await super().history(peer=peer, need_id=need_id)
+
+
+class Silent(World):
+    def answer(self, text: str) -> str | None:
+        return None  # nessun push: le risposte arrivano solo nella cronologia (LatePort)
+
+
+def _patient(h: Harness, seconds: float = 5.0) -> None:
+    h.mod._WAIT_SECONDS, h.mod._WAIT_STEP = seconds, 0.0
+
+
+async def prova_p() -> None:
+    """Hold scaduti all'ospedale Bicocca (2310005, 3470003, 2100008, 2890005; triage 21/11). Misure di
+    Alberto sulla cronologia dell'ospedale: commit STALE_FENCE 10 su 12, `held` -> commit mediana 107 s,
+    hold NO_CAPACITY 28 su 42. Un hold regge circa 2 minuti; la risposta del Ledger e' nella cronologia
+    appena il Relay la accetta, ma il push apre il turno 60-90 s dopo, e l'ospedale aspettava `held` 6 s."""
+
+    print("Prova P - attesa paziente del Ledger e slot gia' presi (hold scaduti, NO_CAPACITY)")
+    confirm = (f"confirm offer_id=of-abc-1 slot_id=S-1 citizen={CIT} consent_ref=cons-N-booking "
+               f"facility={HOSP} prescription_number=prescription_number-N-1")
+
+    h = Harness("hospital.physiatry", HOSP, Silent(HOSP))
+    h.port = LatePort(HOSP, World(HOSP))
+    _patient(h)
+    await h.turn(CUP_OWN, confirm)
+    check("held solo nella cronologia: hold, commit e ricevuta nello stesso turno del confirm",
+          len(h.out(LEDGER, "hold")) == 1 and len(h.out(LEDGER, "commit")) == 1
+          and len(h.out(CUP_OWN, "booking.receipt")) == 1, h)
+
+    h = Harness("hospital.physiatry", HOSP, Silent(HOSP))
+    h.port = LatePort(HOSP, World(HOSP))
+    _patient(h)
+    for sender, text in ((CUP_OWN, confirm.replace("of-abc-1", "of-old-1")),
+                         (HOSP, "hold slot_id=S-1 consent_ref=cons-N-booking"),
+                         (LEDGER, "held hold_id=H-OLD slot_id=S-1 fence=1"),
+                         (HOSP, "commit hold_id=H-OLD consent_ref=cons-N-booking fence=1"),
+                         (LEDGER, "refused commit hold_id=H-OLD code=STALE_FENCE")):
+        h.port.log.append(Message(type="chat", sender=sender, recipient=LEDGER if sender == HOSP else HOSP,
+                                  msg_id=uuid4().hex, need_id=h.need, conversation_id="c-1", body={"text": text}))
+    await h.turn(CUP_OWN, confirm)
+    commits = h.out(LEDGER, "commit")
+    check("hold di prima scaduto (STALE_FENCE) e nuovo confirm sullo stesso slot: nuovo hold, commit sul NUOVO held",
+          len(h.out(LEDGER, "hold")) == 2 and len(commits) == 2 and "hold_id=H-1" in commits[-1].split(), h)
+
+    h = Harness("hospital.physiatry", HOSP, Silent(HOSP), need="N-2026-11-21-000A")
+    await h.turn(CUP_OWN, confirm)
+    h.need = "N-2026-11-21-000B"
+    other = confirm.replace("of-abc-1", "of-def-1").replace(CIT, "citizen:t01/c-0043")
+    await h.turn(CUP_OWN, other)
+    back = h.out(CUP_OWN, "cancel")
+    check("slot tenuto da un altro caso: cancel no_capacity subito, nessun secondo hold",
+          len(h.out(LEDGER, "hold")) == 1 and len(back) == 1 and "reason=no_capacity" in back[0].split()
+          and "offer_id=of-def-1" in back[0].split(), h)
+    h.need = "N-2026-11-21-000C"
+    rows = [ROWS[0].replace("S-1", "S-1"), ROWS[0].replace("S-1", "S-7").replace("09:00", "09:30")]
+    h.world = World(HOSP, {"VIS-FIS:1": slots_reply(HOSP, rows)})
+    await h.turn(CUP_EXT, SEARCH.replace("rq-T1", "rq-P1"))
+    body = " ".join(h.out(CUP_EXT, "offer"))
+    check("ricerca di un CUP partner: lo slot tenuto non si offre", "slot_id=S-7" in body and "slot_id=S-1" not in body, h)
+
+    h.need = "N-2026-11-21-000A"
+    h.port.log.append(Message(type="chat", sender=LEDGER, recipient=HOSP, msg_id=uuid4().hex, need_id=h.need,
+                              conversation_id="c-1", body={"text": "held hold_id=H-9 slot_id=S-1 fence=1"}))
+    await h.turn(LEDGER, "refused commit hold_id=H-9 code=STALE_FENCE")
+    h.need = "N-2026-11-21-000D"
+    await h.turn(CUP_OWN, confirm.replace("of-abc-1", "of-ghi-1").replace(CIT, "citizen:t01/c-0044"))
+    check("commit rifiutato (STALE_FENCE): lo slot torna libero e un altro caso lo puo' tenere",
+          len(h.out(LEDGER, "hold")) == 2, h)
+
+
 async def run() -> None:
-    # Ogni agente ha le sue prove: A, B, D, F, G, I-N provano l'ospedale, C il consultorio; E e H valgono per tutti.
+    # Ogni agente ha le sue prove: A, B, D, F, G, I-N e P provano l'ospedale, C e O il consultorio; E e H valgono per tutti.
     if "family_counseling" in os.path.normpath(AGENT_FILE).split(os.sep):
         await prova_c()
+        await prova_o()
     else:
         await prova_a()
         await prova_b()
@@ -873,6 +1004,7 @@ async def run() -> None:
         await prova_l()
         await prova_m()
         await prova_n()
+        await prova_p()
     await prova_e()
     await prova_h()
     print(f"\n{'TUTTO OK' if not FAILS else str(len(FAILS)) + ' FALLITE'}")
