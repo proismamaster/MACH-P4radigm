@@ -41,23 +41,32 @@ Wave W01QQQ, `level 5`, `agenda_now` 19/11 (giovedì). Console: 200 percorsi, 80
 | 630002 | 3 | cardiologia B it | 123/208 | partner Nord s1 20/11, consenso rifiutato, `cancel consent_declined`, silenzio |
 | 050002 | 3 | consultorio | 0/0 | caso 5 |
 
-### Partner con 25 ricerche (CUP 1.0.14; 21/11 00:54-01:00 UTC = 01:54-02:00 locali)
+### Partner con 25 ricerche (CUP 1.0.14; 21/11 00:54-01:10 UTC = 01:54-02:10 locali)
 
 Causa 2 chiarita da Opus: `city.find` dà `role=hospital` e il CUP filtrava `role=facility`; dalla 1.0.14 `asked=25`. Cattura dal vivo di `GET /v1/logs?agent_id=agent%3Aez8cb7j167p2&q=cup.partner` (il log tiene pochi secondi; un campione ogni ~20 s perché il pannello della console è nascosto):
 
 | Need (ultime cifre) | Priorità | `now` agenda | asked | answered | usable_offers |
 |---|---|---|---|---|---|
-| 209 | B | 19/11 18:58 | 25 | 17 | 0 |
+| 209 | B | 19/11 18:58 | 25 | 18 | 0 |
 | 211 | B | 19/11 23:17 | 25 | 17 | 0 |
-| 1910002 | B | 20/11 05:05 | 25 | 0 (in corso) | 0 |
+| 212 | B | 20/11 10:39 | 25 | 17 | 0 |
+| 213 | B | 20/11 17:01 | 25 | 16 | 0 |
+| 1910002 | B | 20/11 05:05 | 25 | 16 | 0 |
+| 1610003 | B | 20/11 08:59 | 25 | 17 | 0 |
+| 1630004 | B | 20/11 12:54 | 25 | 17 | 0 |
+| 1590003 | B | 20/11 15:11 | 25 | 15 | 0 |
+| 1790002 | B | 20/11 15:16 | 25 | 15 | 0 |
+| 1400005 | B | 20/11 16:08 | 25 | 17 | 0 |
+| 980006 | B | 20/11 18:13 | 25 | 15 | 0 |
 
-- Risposte dei 25 per il 211: `no_availability` 12, `facility_unavailable` 3, `policy_unavailable` 1, `temporarily_unavailable` 1, `NO_CAPACITY` 1 (Isola), `no_slot` 1 (Precotto specialista), una **offerta**: Gorla specialista (`agent:h6krzxx6es83`) VIS-CARD, lun 23/11 10:30 e 12:00. Per una B con `now` 19/11 23:17 la scadenza è 21/11 23:17, quindi il CUP la scarta (`usable_offers=0`): scarto giusto.
-- Esito: con 25 partner non è ancora arrivata nessuna offerta utilizzabile e nessuna prenotazione da partner. Campione piccolo (3 ricerche in 7 minuti): il CUP cerca fuori solo quando l'ASST non ha posti.
+- Risposte dei partner (somma delle 11 ricerche, righe distinte): `no_availability` 39, `facility_unavailable` 7, `policy_unavailable` 3, `temporarily_unavailable` 3, `no_slots_available` 3, `no_slot` 2, `UNAVAILABLE` 2, `NO_CAPACITY` 1 (Isola), una `data.response` (un partner risponde con l'atto sbagliato) e **2 offerte**: Gorla specialista (`agent:h6krzxx6es83`) VIS-CARD lun 23/11 10:30 e 12:00 per il 211, e Gorla ospedale (`agent:m6py14a1ej77`) VIS-FIS mar 24/11 10:30 per il 209. Per una B la scadenza è `now` + 2 giorni (21/11 e 22/11): il CUP le scarta (`usable_offers=0`), scarto giusto.
+- Esito: con 25 partner, in 11 ricerche, nessuna offerta utilizzabile e nessuna prenotazione da partner. Rispondono da 15 a 18 su 25, mai tutti. Sono tutte priorità B, tutte con `now` fra 19/11 e 20/11.
+- Probabile effetto collaterale: il CUP aspetta i partner prima di rispondere, e la prima risposta al cittadino tarda. I percorsi `open` sono saliti da 26 (00:30 UTC) a 33 (00:54) a 52 (01:10), e i `failed` da 80 a 93 a 90 (la lista della console copre gli ultimi 200 percorsi).
 - Ipotesi: un partner che offre fuori scadenza per una B suggerisce che anche gli altri applicano la finestra: la risposta `no_availability` è coerente con il mondo esaurito entro 2 giorni. Il verdetto dei nostri `failed` (`S` fino a 297) non dice dove siano quei posti.
 
-### Livello 6 (dalle 02:15 locali; letto alle 02:00)
+### Livello 6 (dalle 02:15 locali; letto alle 02:10)
 
-Non ancora iniziato al momento della lettura. Scansione dei percorsi `booked`/`done` recenti: 2 letti su 23 (000195 `done` L3, 000183 `booked` L5, entrambi con ricevuta e nessun `cancel` dopo); gli altri 21 in timeout. Nessun `fault.cancel` né `facility_cancelled` dopo una ricevuta finora. Il prossimo giro (alle :07, :27, :47) cerca `facility_cancelled` e `fault.cancel` dopo `booking.receipt` e se il CUP riprenota entro la scadenza.
+Non ancora iniziato: i livelli dei percorsi in console sono 1-5 (3, 44, 84, 54, 15). Scansione dei percorsi `booked`/`done` recenti: 11 letti (livelli 3, 4, 5), tutti con ricevuta e nessun `cancel` dopo; nessun `fault.cancel` né `facility_cancelled` dopo una ricevuta. Il prossimo giro (alle :27 e :47) cerca `facility_cancelled` e `fault.cancel` dopo `booking.receipt` e se il CUP riprenota entro la scadenza.
 
 ## Percorsi falliti e aperti (console, 20/11 23:50)
 
