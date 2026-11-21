@@ -1628,11 +1628,13 @@ def _deadline_refused(chat: list[Message], citizen: str) -> bool:
 
 def _cup_relaxed(
     lines: list[str], *, now: datetime, lang: str, gender: str | None, procedure: str,
-    priority: str | None = None, widen: bool = True,
+    priority: str | None = None, widen: bool = True, until: datetime | None = None,
 ) -> list[dict[str, str]]:
     """Try other weekdays within the priority window, then widen only the window (not after a
     refusal for the deadline: a later date is exactly what the citizen refused)."""
-    within_window = fitting(lines, now=now, priority=priority, lang=lang, gender=gender, procedure=procedure)
+    within_window = fitting(
+        lines, now=now, priority=priority, lang=lang, gender=gender, procedure=procedure, until=until,
+    )
     if within_window or not widen:
         return within_window
     return fitting(
@@ -1876,9 +1878,10 @@ async def _advance_alone(
         if slot_id not in taken and facility.startswith("agent:") and facility != agent and facility not in unavailable
     ]
     language, gender = _lang(chat, citizen), _gender(chat, citizen)
+    until = _true_deadline(chat, citizen, priority)
     chosen = fitting(
         lines, now=now, priority=priority, lang=language, gender=gender, procedure=procedure,
-        days=_cup_days(chat, citizen), until=_true_deadline(chat, citizen, priority),
+        days=_cup_days(chat, citizen), until=until,
     )
     if chosen:
         await _cup_offer_batch(city, message, sent, citizen, chosen, number, priority, now=now, replacing=replacing)
@@ -1910,7 +1913,7 @@ async def _advance_alone(
     if number and procedure in _CUP_SERVICES and priority in {"U", "B", "D"}:
         relaxed = _cup_relaxed(
             lines, now=now, lang=language, gender=gender, procedure=procedure, priority=priority,
-            widen=not _deadline_refused(chat, citizen),
+            widen=not _deadline_refused(chat, citizen), until=until,
         )
         if case.cross_asst_declined:
             if relaxed:
