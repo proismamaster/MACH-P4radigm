@@ -1,6 +1,11 @@
 
 # Problemi
 
+## CUP: timeout della cronologia all'inizio del turno (21/11)
+
+- Su `main` a `7fc36cd`, un `UPSTREAM_TIMEOUT` (504) di `city.history` nel turno della conferma usciva da `main()` e l'SDK chiudeva il messaggio come `rejected`. Il test riproduce il guasto sul CUP. Il caso 3590002 è il riferimento per lo stesso tipo di guasto lato ospedale. La causa del silenzio in quel percorso resta da verificare nei log.
+- Il CUP ritenta una volta sui 5xx. Se la rilettura fallisce o l'errore è 4xx, registra `cup.history.failed` e si ferma prima di eseguire azioni che dipendono dallo stato.
+
 ## CUP, campione precedente al rilascio della 1.0.24 (21/11)
 
 - Nei 39 export di percorsi falliti, i rifiuti del cittadino compaiono in 14 percorsi per `day`, 13 per `gender`, 11 per `deadline` e 1 per `past`. Le categorie si sovrappongono. Sono conteggi tra i falliti esportati e non misurano il tasso di errore della wave.

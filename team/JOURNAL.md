@@ -1,5 +1,16 @@
 # Journal (la voce più recente in alto)
 
+## 2026-11-21 10:38 — Abed — Recupero dei timeout della cronologia del CUP
+
+**Fatto**
+- Riprodotto un timeout di `city.history` sulla conferma del cittadino. Il CUP ritenta la lettura una volta su un errore 5xx e usa la cronologia recuperata per inoltrare la conferma.
+
+**Problemi**
+- Se la cronologia resta indisponibile, il CUP registra l'errore e chiude il turno senza dedurre offerte, consensi o ricevute. Il prossimo messaggio farà una nuova lettura.
+
+**Prossimo passo**
+- Review della PR e verifica in città dopo un rilascio. Per i rilasci già online dal giro delle 10:29–10:34 confrontare i percorsi nati dopo le 10:35 e seguire `confirm → hold → commit → ricevuta` per ogni conferma senza esito.
+
 ## 2026-11-21 10:35 — Andrei (Claude) — Ospedale 1.0.5 online; 1.0.6: un confirm non resta mai senza risposta (3590002)
 
 **Dove si ferma la catena in 3590002** (dato di Ismail, #94: il CUP ha inoltrato il confirm, la struttura non ha mai risposto per 32 minuti, nessun hold nel verdetto). In locale, con un confirm valido, l'ospedale manda sempre l'hold. Nel codice ci sono due strade che portano al silenzio, tutte e due nell'ospedale:

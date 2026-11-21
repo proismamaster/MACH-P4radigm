@@ -177,11 +177,12 @@ async def main(need: Need, city: City) -> None:
         if not message.need_id:
             return
         async with _case_lock(message.need_id):
-            chat = await city.history(need_id=message.need_id)
-            await handle(role, city, message, chat)
+            chat = await _load_case_history(city, message.need_id)
+            if chat is not None:
+                await handle(role, city, message, chat)
         return
-    case = await city.history(need_id=message.need_id)
-    await handle(role, city, message, case)
+    # With no CUP role, handle only serves the stateless address inquiry.
+    await handle(role, city, message, [])
 
 
 def _asks_address(message: Message) -> bool:
@@ -337,6 +338,26 @@ def _exact(chat: list[Message], agent: str, text: str) -> bool:
     return any(row.sender == agent and row.text.strip() == text for row in chat)
 
 
+def _history_can_retry(error: CapError) -> bool:
+    try:
+        return 500 <= error.http_status() < 600
+    except CapError:
+        return False  # An unknown CAP code does not authorize a retry.
+
+
+async def _load_case_history(city: City, need_id: str) -> list[Message] | None:
+    """Load the authoritative case before processing an inbound message."""
+
+    for attempt in range(2):
+        try:
+            return await city.history(need_id=need_id)
+        except CapError as error:
+            if attempt or not _history_can_retry(error):
+                _LOG.warning("cup.history.failed need=%s code=%s", need_id, error.code)
+                break
+    return None
+
+
 async def _until(
     city: City,
     need_id: str | None,
@@ -344,18 +365,26 @@ async def _until(
     ready: Callable[[list[Message]], bool],
     *,
     max_polls: int | None = None,
-) -> list[Message]:
+) -> list[Message] | None:
     """Re-read the case until ``ready`` or the short wait ends. The push may never arrive."""
 
+    if not need_id:
+        return None
     fresh = chat
+    previous_failed = False
     polls = _PULL_TRIES if max_polls is None else min(max_polls, _PULL_TRIES)
     for attempt in range(polls):
         try:
             fresh = await city.history(need_id=need_id)
-        except CapError:
-            fresh = chat
-        if ready(fresh):
-            return fresh
+        except CapError as error:
+            if previous_failed or not _history_can_retry(error):
+                _LOG.warning("cup.history.failed need=%s code=%s", need_id, error.code)
+                return None
+            previous_failed = True
+        else:
+            previous_failed = False
+            if ready(fresh):
+                return fresh
         if attempt + 1 < polls:
             await asyncio.sleep(_PULL_PAUSE)
     return fresh
@@ -1504,6 +1533,8 @@ async def _cup_cross_asst(
             city, message.need_id, chat,
             lambda rows: not (searches.keys() - collect(rows)[1]), max_polls=6,
         )
+        if fresh is None:
+            return
         offers, answered = collect(fresh)
     for slot in offers:
         _PARTNER_GOOD.setdefault(service, {})[slot["facility"]] = None
@@ -1696,13 +1727,15 @@ async def _advance_alone(
                 await _cup_send(city, message, sent, LEDGER, "agenda")
             if hint and _latest_slots(known) is None and not _asked(chat, agent, hint, 1):
                 await _cup_send(city, message, sent, LEDGER, f"world procedure={hint} page=1")
-            chat = await _until(
+            rows = await _until(
                 city,
                 message.need_id,
                 chat,
                 lambda rows: _cup_prescription(rows, number, citizen) is not None,
             )
-            chat = _cup_history(chat, sent, agent, key)
+            if rows is None:
+                return
+            chat = _cup_history(rows, sent, agent, key)
             continue
         if not procedure:
             return
@@ -1717,13 +1750,15 @@ async def _advance_alone(
             await _cup_send(city, message, sent, LEDGER, "agenda")
         if world is None and not _asked(fresh(chat), agent, procedure, 1):
             await _cup_send(city, message, sent, LEDGER, f"world procedure={procedure} page=1")
-        chat = await _until(
+        rows = await _until(
             city,
             message.need_id,
             chat,
             lambda rows: _has_agenda(fresh(rows)) and _latest_slots(fresh(rows)) is not None,
         )
-        chat = _cup_history(chat, sent, agent, key)
+        if rows is None:
+            return
+        chat = _cup_history(rows, sent, agent, key)
     else:
         return
     if now is None or world is None:
@@ -1791,7 +1826,7 @@ async def _advance_alone(
             return sum(1 for row in rows if row.sender == LEDGER and first_word(row.text) == "slots")
         before = pages_read(chat)
         fresh_rows = await _until(city, message.need_id, chat, lambda rows: pages_read(rows) > before)
-        if pages_read(fresh_rows) > before:
+        if fresh_rows is not None and pages_read(fresh_rows) > before:
             await _advance_alone(
                 city, message, _cup_history(fresh_rows, sent, agent, key), key, replacing=replacing,
             )
