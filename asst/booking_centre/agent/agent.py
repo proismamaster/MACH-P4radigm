@@ -30,6 +30,7 @@ _MAX_PAGE = 8
 _LEAD = timedelta(hours=4)
 # Doctor key (the last segment of doctor_id) -> languages, gender, days. ``*`` is the ASST's
 # rare language. The Ledger's slot line names the doctor; it does not repeat this table.
+_OWN_RARE_LANGUAGE = "ti"
 _DOCTORS: dict[str, tuple[frozenset[str], str, frozenset[str]]] = {
     "h1": (frozenset({"it", "en"}), "f", frozenset({"mon", "tue", "wed"})),
     "h2": (frozenset({"it"}), "m", frozenset({"wed", "thu", "fri"})),
@@ -333,7 +334,10 @@ def _speaks(doctor_id: str, lang: str) -> bool:
     langs = spec[0]
     if lang in langs:
         return True
-    return "*" in langs and lang not in {"it", "en"}
+    # "*" is the rare language of the doctor's own ASST. fitting() only reads our own world
+    # slice, so for our h3 that is Tigrinya (registry: asst-bicocca-h3 speaks it/ti). Any other
+    # rare language was offered to the wrong citizen (142: lang=hi got our h3).
+    return "*" in langs and lang == _OWN_RARE_LANGUAGE
 
 
 def fitting(
