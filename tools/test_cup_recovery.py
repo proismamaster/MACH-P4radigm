@@ -73,7 +73,7 @@ class Case:
     async def search(self, query):
         return [
             Peer(HOSPITAL, role="facility", district=4, capabilities=(SERVICE,)),
-            Peer(PARTNER, role="facility", district=6, capabilities=(SERVICE,)),
+            Peer(PARTNER, role="hospital", district=6, capabilities=(SERVICE,)),  # as the live Index reports it
         ]
 
     async def post(self, *, to, message_type, body, need_id, conversation_id, traceparent=None):
