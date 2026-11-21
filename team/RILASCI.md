@@ -17,7 +17,7 @@ Chi rilascia aggiunge la riga **subito dopo** `city deploy` / `city rollback`, n
 |---|---|---|---|---|---|
 | gp | `agent:rng5wcrzvhsj` | 1.0.5 | 07:29 | — | 1.0.4 |
 | booking_centre | `agent:ez8cb7j167p2` | 1.0.23 | 04:32 | — | 1.0.22 |
-| hospital | `agent:bb01ggxymm05` | 1.0.4 | 03:48 | `dep-f79eb4f15c114b6e86c158a6005ec3db` | 1.0.3 |
+| hospital | `agent:bb01ggxymm05` | 1.0.5 | 09:21 | `dep-cf00a39451224746830c99b8bac21e0b` | 1.0.4 |
 | specialist | `agent:sh35cbsy287d` | 1.0.4 | 02:57 | `dep-3bdea6595d254e1ebd423ca375e38ac4` | 1.0.3 |
 | family_counseling | `agent:nkh372rd16yq` | 1.0.8 | 03:53 | `dep-095cc796b9394679951c8376d4f09d6b` | 1.0.7 |
 
@@ -38,5 +38,6 @@ Chi rilascia aggiunge la riga **subito dopo** `city deploy` / `city rollback`, n
 | 21/11 04:32 | booking_centre | 1.0.23 | deploy | — | `e88be09` | scadenza B/D dalla nascita del need, date dei partner in UTC, giorni abbreviati (`4c92cb8`) |
 | 21/11 04:43 | gp | 1.0.4 | deploy | — | `597c313` | red flag del livello 8 in altre parole (`225c3c1`) |
 | 21/11 07:29 | gp | 1.0.5 | deploy | — | `e439bcb` | world condiviso per ondata (`f72ce63`) |
+| 21/11 09:21 | hospital | 1.0.5 | deploy (Andrei) | `dep-cf00a39451224746830c99b8bac21e0b` | `653606b` | MACH-1.3 `earliest`/`deadline` (`b5dcb99`), orologio d'agenda estrapolato e minimo 10 ore (U 4) nelle offerte ai partner, `offer_id` letto sulla sua riga (#95). Conformance PASS. |
 
 Commit: per le righe fino alle 07:29 è il commit del bump della card (il codice rilasciato è quello del suo genitore su `main`); dalle prossime, lo SHA di `main` rilasciato. Le righe con «—» sono ricostruite dai commit: chi ha fatto quei deploy può completare il deployment.
