@@ -36,6 +36,21 @@ _DOCTORS: dict[str, tuple[frozenset[str], str, frozenset[str]]] = {
     "c1": (frozenset({"it", "en"}), "f", frozenset({"mon", "tue", "wed", "thu", "fri"})),
 }
 _DEADLINE_DAYS = {"B": 2, "D": 5}
+
+
+def _agenda_horizon(now: datetime, days: int) -> datetime:
+    """``now`` plus ``days`` days of AGENDA. Saturday and Sunday do not exist in the agenda: after
+    Friday it goes on from Monday (kit, ADR-124). B on a Thursday ends on Monday, not on Saturday."""
+
+    at = now
+    left = days
+    while left > 0:
+        at += timedelta(days=1)
+        if at.weekday() < 5:
+            left -= 1
+    return at
+
+
 _LOG = logging.getLogger("care")
 # The Relay accepts a ledger reply and then the agent rejects the push, so the reply sits in
 # the case history and never opens a turn. Wait briefly and read it back from history.
@@ -390,7 +405,7 @@ def fitting(
     elif priority == "P":
         horizon = None
     else:
-        horizon = now + timedelta(days=_DEADLINE_DAYS.get(priority or "", 14))
+        horizon = _agenda_horizon(now, _DEADLINE_DAYS.get(priority or "", 14))
     earliest = now + _LEAD
     chosen: list[tuple[datetime, dict[str, str]]] = []
     for line in lines:
@@ -1358,7 +1373,7 @@ def _facility_slots(
         horizon = None
         earliest = now + _LEAD
     else:
-        horizon = now + timedelta(days=_DEADLINE_DAYS.get(priority or "", 14))
+        horizon = _agenda_horizon(now, _DEADLINE_DAYS.get(priority or "", 14))
         earliest = now + _LEAD
     chosen: list[tuple[datetime, dict[str, str]]] = []
     reserved = 0
