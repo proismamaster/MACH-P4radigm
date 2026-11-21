@@ -20,10 +20,10 @@ Controllato con `city --json status` alle 11:45 UTC.
 | gp | `agent:rng5wcrzvhsj` | 1.0.7 | 11:35 | `dep-00f0f71e97ab4a988ef0e4bb1ea82243` | 1.0.6 |
 | booking_centre | `agent:ez8cb7j167p2` | 1.0.26 (secondo build, #118 + #119) | 11:18 | `dep-77ea4b5b7cd34d45b8281d7656f315fd` | 1.0.25 |
 | hospital | `agent:bb01ggxymm05` | 1.0.7 | 10:47 | `dep-bbe98f223dff429490fb412e3eaa7e39` | 1.0.6 |
-| specialist | `agent:sh35cbsy287d` | 1.0.7 | 10:09 | `dep-e266d81085594c5eadcb63e840d30232` | 1.0.6 |
+| specialist | `agent:sh35cbsy287d` | 1.0.8 | 11:58 | `dep-0529d8ed84554da29972a22e62022443` | 1.0.7 |
 | family_counseling | `agent:nkh372rd16yq` | 1.0.14 | 11:45 | `dep-a3b16f15ea954d64814b20edde0e05f6` | 1.0.13 |
 
-Prossimi numeri (card su `main`): CUP 1.0.27, GP 1.0.8, ospedale 1.0.8, specialist 1.0.8, consultorio 1.0.15.
+Prossimi numeri (card su `main`): CUP 1.0.27, GP 1.0.8, ospedale 1.0.8, specialist 1.0.9, consultorio 1.0.15. Scale: CUP e GP un pod, concorrenza 32.
 
 ## Registro
 
@@ -64,4 +64,6 @@ Prossimi numeri (card su `main`): CUP 1.0.27, GP 1.0.8, ospedale 1.0.8, speciali
 | 21/11 11:27 | gp | 1.0.6 | deploy (Ismail/Opus) | `dep-3fa923f18e4242cd9735b880c02639ee` | `a098c38` | dopo `prescribe` legge la storia una volta al secondo fino a 90 s per `prescribed` (405: ricetta sul Ledger mai annunciata, il cittadino non arriva al CUP); log `gp.prescribed.late` (#122). Conformance PASS. |
 | 21/11 11:35 | gp | 1.0.7 | deploy (Ismail/Opus) | `dep-00f0f71e97ab4a988ef0e4bb1ea82243` | `a4e1c70` | attesa del `prescribed` limitata a 90 s di tempo reale e a 3 errori di fila della storia (prima: 90 letture, un turno poteva durare minuti con letture lente) (#125). Conformance PASS. |
 | 21/11 11:45 | family_counseling | 1.0.14 | deploy (Ismail/Opus) | `dep-a3b16f15ea954d64814b20edde0e05f6` | `c65cccd` | stato letto dalla cronologia dopo un cambio di pod: rifiuti già gestiti, riprova unica, offerte dovute dopo un cancel (Hapca, #127; 9 controlli nuovi falliscono sulla 1.0.13). Conformance PASS. |
+| 21/11 11:58 | specialist | 1.0.8 | deploy (Ismail/Opus) | `dep-0529d8ed84554da29972a22e62022443` | `00cf662` | regola P2 in vigore (agenda 29/12 08:00): hold cross-ASST con `cross_asst_consent_ref`/`cross_consent_ref` quando il CUP li manda separati da `consent_ref` (#129). Conformance PASS. |
+| 21/11 11:58 | booking_centre, gp | — | `city scale --min 1 --max 1 --concurrency 32` (Ismail/Opus) | — | — | era 8 (05:48). Export 10:53-11:53 UTC: alle 11:31:38-51 circa 60 cittadini scrivono al CUP insieme, 37 non ricevono mai risposta (e 5 al GP). Un solo pod: con più repliche due pod gestirebbero lo stesso caso. |
 Commit: per le righe fino alle 07:29 è il commit del bump della card (il codice rilasciato è quello del suo genitore su `main`); dalle prossime, lo SHA di `main` rilasciato. Le righe con «—» sono ricostruite dai commit: chi ha fatto quei deploy può completare il deployment.
