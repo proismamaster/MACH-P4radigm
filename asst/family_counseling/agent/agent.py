@@ -160,7 +160,16 @@ async def main(need: Need, city: City) -> None:
         # 5 signed pages of 200): the conformance probes have none, and that kept the turn open
         # past the 5 s custody.ack waits for the lease renew (same fix as the hospital, PR #74).
         return
-    case = await city.history(need_id=message.need_id)
+    # A relay error here (504 under load) used to leave the brain with an exception: the harness closes the
+    # message as rejected for good and the confirm never comes back. Read again, then go on with the message.
+    case = [message]
+    for attempt in range(3):
+        try:
+            case = await city.history(need_id=message.need_id)
+            break
+        except CapError:
+            if attempt < 2:
+                await asyncio.sleep(1.0 + attempt)
     await handle(role_of(), city, message, case)
 
 
@@ -318,6 +327,43 @@ async def _say(city: City, to: str, text: str) -> bool:
     except CapError:
         return False
     return True
+
+
+# The Relay can refuse a hold or a commit at once with a CapError. These have no definite outcome: the
+# line may or may not be on the Ledger, so it is sent again on the next read (the citizen's or the booking
+# centre's repeated confirm, the Ledger's own reply). Any other code is a refusal, answered like the
+# Ledger's own ``refused`` line. Before, ``_say`` swallowed both and the confirm stayed without an answer
+# (3590002 in the hospital, the consultorio's cancel EXPIRED one second after the confirm).
+_UNCERTAIN = {
+    "RATE_LIMITED", "DRAINING", "QUARANTINED", "SUSPENDED", "UPSTREAM_TIMEOUT", "AGENT_LOST_CUSTODY",
+    "TARGET_NOT_VISIBLE",
+}
+
+
+async def _say_ledger(
+    city: City, message: Message, chat: list[Message], text: str, *, op: str, slot: str, hold_id: str = ""
+) -> str:
+    """Send a hold or a commit. "sent" (or already there: DUPLICATE), "uncertain", or "refused" (handled)."""
+
+    try:
+        await city.say(LEDGER, text)
+    except CapError as error:
+        _LOG.warning("care.%s.failed need=%s slot=%s code=%s", op, (message.need_id or "")[:48], slot, error.code)
+        if error.code in {"DUPLICATE", "IDEMPOTENCY_CONFLICT"}:
+            return "sent"
+        if error.code in _UNCERTAIN:
+            return "uncertain"
+        line = f"refused {op} slot_id={slot} code={error.code}" + (f" hold_id={hold_id}" if hold_id else "")
+        refusal = Message(
+            type="chat", sender=LEDGER, recipient=city.agent_id, msg_id=f"relay-{op}-{message.msg_id}",
+            need_id=message.need_id, conversation_id=message.conversation_id, body={"text": line},
+        )
+        rows = chat if any(row.msg_id == message.msg_id for row in chat) else [*chat, message]
+        await _on_refused(
+            city, refusal, rows, hold_self=True, asker=message.sender if message.sender != LEDGER else ""
+        )
+        return "refused"
+    return "sent"
 
 
 def _latest(chat: list[Message], head: str, token: str) -> Message | None:
@@ -1045,9 +1091,12 @@ async def _confirm_once(
         parts.append(f"consent_ref={hold_consent}")
         memory.offers.add(f"hold:{slot}")
         _mark_gone(slot, "held", key)  # the other cases of this process stop offering it, now
-        if not await _say(city, LEDGER, " ".join(parts)):
-            _release(slot, key)
-            return
+        outcome = await _say_ledger(city, message, chat, " ".join(parts), op="hold", slot=slot)
+        if outcome != "sent":
+            if outcome == "uncertain":
+                _release(slot, key)
+                memory.offers.discard(f"hold:{slot}")  # the confirm sent again holds again
+            return  # refused: _say_ledger has already answered like a Ledger `refused hold`
     await _finish_booking(city, message, chat, slot, hold_self=hold_self)
 
 
@@ -1197,7 +1246,8 @@ async def _finish_booking(
     if first_word(reply.text) == "refused":
         await _on_refused(city, reply, fresh, hold_self=hold_self)
         return
-    await _on_held(city, reply, fresh)
+    if not await _on_held(city, reply, fresh):
+        return  # no commit on its way (refused, or the Relay is down): nothing to wait for
     hold_id = fields_of(reply.text).get("hold_id", "")
     if not hold_id:
         return
@@ -1216,17 +1266,19 @@ async def _finish_booking(
         await _on_refused(city, reply, fresh, hold_self=hold_self)
 
 
-async def _on_held(city: City, message: Message, chat: list[Message]) -> None:
+async def _on_held(city: City, message: Message, chat: list[Message]) -> bool:
+    """Commit the hold. False when no commit is on its way (nothing to wait for), True otherwise."""
+
     fields = fields_of(message.text)
     hold_id = fields.get("hold_id", "")
     slot = fields.get("slot_id", "")
     if not hold_id or not slot:
         _LOG.info("care.held.skip", extra={"head": first_word(message.text)[:40]})
-        return
+        return False
     memory = _sent(f"confirm:{message.need_id or message.msg_id}")
     _mark_gone(slot, "held", message.need_id or message.msg_id)
     if f"commit:{hold_id}" in memory.offers or _our_commit(chat, city.agent_id, hold_id):
-        return
+        return True
     _, consent, number = _booking_of(chat, city.agent_id, slot)
     if not consent:
         consent, held_number = _latest_hold(chat, city.agent_id)
@@ -1238,7 +1290,7 @@ async def _on_held(city: City, message: Message, chat: list[Message]) -> None:
         consent = f"cons-{need}-booking"
     if not consent:
         _LOG.info("care.held.noconsent", extra={"need_id": need[:48]})
-        return
+        return False
     parts = [
         "commit",
         f"hold_id={hold_id}",
@@ -1248,7 +1300,10 @@ async def _on_held(city: City, message: Message, chat: list[Message]) -> None:
     if number:
         parts.append(f"prescription_number={number}")
     memory.offers.add(f"commit:{hold_id}")
-    await _say(city, LEDGER, " ".join(parts))
+    outcome = await _say_ledger(city, message, chat, " ".join(parts), op="commit", slot=slot, hold_id=hold_id)
+    if outcome == "uncertain":
+        memory.offers.discard(f"commit:{hold_id}")  # the next read of the case commits again
+    return outcome == "sent"
 
 
 async def _on_committed(city: City, message: Message, chat: list[Message]) -> None:
@@ -1346,8 +1401,10 @@ async def _fresh_rules(city: City, message: Message, chat: list[Message]) -> lis
 
 
 async def _on_refused(
-    city: City, message: Message, chat: list[Message], *, hold_self: bool
+    city: City, message: Message, chat: list[Message], *, hold_self: bool, asker: str = ""
 ) -> None:
+    """A refusal of our hold or commit, from the Ledger or (``asker`` = who confirmed) from the Relay."""
+
     agent = city.agent_id
     slot = fields_of(message.text).get("slot_id", "")
     if not slot:
@@ -1395,7 +1452,8 @@ async def _on_refused(
                 await _finish_booking(city, message, chat, slot, hold_self=hold_self, skip=known)
                 return
             _release(slot, owner)
-    target, _, _ = _booking_of(chat, agent, slot)
+    # Who confirmed: from our hold line, else (a hold the Relay refused is in no history) from the confirm.
+    target = _booking_of(chat, agent, slot)[0] or asker or _citizen(chat) or ""
     await _recover(city, message, chat, slot, reason, hold_self=hold_self, target=target)
 
 
@@ -1420,9 +1478,11 @@ async def _recover(
     if not offer_id:
         offer_id = _confirmed_offer(chat, agent, slot)
     if not offer_id:
+        # Our offers are one message with a line per slot: the offer_id of THIS slot is on its own line.
         for row in chat:
-            if f"slot_id={slot}" in row.text.split():
-                offer_id = fields_of(row.text).get("offer_id", offer_id)
+            for text in row.text.splitlines():
+                if f"slot_id={slot}" in text.split():
+                    offer_id = fields_of(text).get("offer_id", offer_id)
     line = _refusal_line(code, offer_id, slot, target.startswith("agent:"))
     if (
         target

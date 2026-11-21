@@ -9,7 +9,7 @@ Console 21/11 07:30-08:50 UTC (percorsi 2560005, 3290003, 3200003, 2710004, 2660
   `refused hold code=NO_CAPACITY` dopo ~100 s;
 - il `cancel reason=NO_CAPACITY` e le offerte sostitutive citano di nuovo lo slot rifiutato (il cancel
   appena mandato non e' ancora nella cronologia): il cittadino lo riconferma e resta senza risposta;
-- 30 commit su 36 finiscono in `refused commit code=STALE_FENCE detail=the fence expired`: il commit parte
+- 27 commit su 36 finiscono in `refused commit code=STALE_FENCE detail=the fence expired`: il commit parte
   60-90 s dopo `held` (il push della risposta del Ledger arriva in ritardo) e un hold dura circa 2 minuti;
   i commit partiti entro 10 s da `held` sono andati tutti a buon fine;
 - `refused hold code=EXPIRED detail=slot ... has passed`: lo slot e' passato, una riprova non puo' riuscire.
@@ -143,7 +143,7 @@ async def no_capacity() -> None:
     h = make()
     a = await open_case(h, N_A, CIT_A)
     b = await open_case(h, N_B, CIT_B)
-    check("ogni cittadino riceve tre offerte in un solo messaggio (prima: un secondo giro a ogni push del Ledger)",
+    check("ogni cittadino riceve tre offerte in un solo messaggio",
           len(a) == 3 and len(b) == 3 and batches(h, CIT_A) == 1 and batches(h, CIT_B) == 1, h)
     check("B riceve per prima uno slot che ad A non e' stato offerto (prima: le stesse quattro nello stesso ordine)",
           b[0] not in a and a[0] == S1030, h)
@@ -171,6 +171,16 @@ async def no_capacity() -> None:
     check("... una risposta (il cancel o le offerte), non il silenzio",
           len(cancels(h, CIT_A)) + len(offered(h, CIT_A)) > spoken, h)
     check("... che non rimette in offerta lo slot rifiutato", a[0] not in offered(h, CIT_A)[len(a):], h)
+
+    # Il cittadino sceglie la seconda offerta (le tre offerte sono un solo messaggio): il cancel porta il SUO offer_id.
+    h2 = make()
+    a2 = await open_case(h2, N_A, CIT_A)
+    h2.world.held[a2[1]] = "bk-altro"
+    await confirm(h2, N_A, CIT_A, a2[1])
+    cs2 = cancels(h2, CIT_A)
+    check("conferma della seconda offerta rifiutata: il cancel nomina l'offer_id e lo slot della seconda, non della prima",
+          len(cs2) == 1 and f"offer_id=of-{a2[1]}" in cs2[0] and f"slot_id={a2[1]}" in cs2[0]
+          and f"of-{a2[0]}" not in cs2[0], h2)
 
     # 3290003: lo stesso, sul secondo cittadino dello stesso mondo.
     b = await open_case(h, N_B, CIT_B)
@@ -411,10 +421,92 @@ async def ricerche_dei_cup() -> None:
     check("... lo stesso confirm di nuovo non fa un secondo cancel", len(h.out(CUP, "cancel")) == 1, h)
 
 
+# --- 7. Il Relay rifiuta subito l'hold o il commit con una CapError ---------------------------------------------
+
+
+class Flaky(tf.Port):
+    """Il Relay vero: rifiuta hold e commit subito con una CapError (una per messaggio, nell'ordine),
+    oppure history in 504."""
+
+    def __init__(self, me, *, hold=(), commit=(), history_fails=0, world=None):
+        super().__init__(me)
+        self.hold, self.commit, self.history_fails, self.world = list(hold), list(commit), history_fails, world
+
+    async def history(self, *, peer=None, need_id=None):
+        if self.history_fails:
+            self.history_fails -= 1
+            raise tf.CapError("UPSTREAM_TIMEOUT", "history")
+        return await super().history(peer=peer, need_id=need_id)
+
+    async def post(self, *, to, message_type, body, need_id, conversation_id, traceparent):
+        text = body.get("text", "")
+        for op, codes in (("hold ", self.hold), ("commit ", self.commit)):
+            if to == tf.LEDGER and text.startswith(op) and codes:
+                code = codes.pop(0)
+                if code:
+                    if op == "commit " and self.world is not None:  # the Relay found the fence stale: the hold lapsed
+                        hold = dict(w.split("=", 1) for w in text.split()[1:] if "=" in w)["hold_id"]
+                        for s in [s for s, h in self.world.held.items() if h == hold]:
+                            del self.world.held[s]
+                    raise tf.CapError(code, op.strip())
+        return await super().post(to=to, message_type=message_type, body=body, need_id=need_id,
+                                  conversation_id=conversation_id, traceparent=traceparent)
+
+
+async def rifiuti_del_relay() -> None:
+    print("Il Relay rifiuta subito l'hold o il commit: il cittadino lo sa, niente silenzio")
+    for code in ("NO_CAPACITY", "EXPIRED"):
+        h = make()
+        h.port = Flaky(ME, hold=[code])
+        a = await open_case(h, N_A, CIT_A)
+        await confirm(h, N_A, CIT_A, a[0])
+        cs = cancels(h, CIT_A)
+        check(f"hold rifiutato dal Relay ({code}): un cancel al cittadino con offer_id e slot_id, nessuna riprova",
+              len(cs) == 1 and f"reason={code}" in cs[0] and f"slot_id={a[0]}" in cs[0]
+              and h.world.hold_calls == [], h)
+        again = offered(h, CIT_A)[len(a):]
+        check(f"... e offerte sostitutive senza lo slot rifiutato ({code})",
+              bool(again) and a[0] not in again and len(again) == len(set(again)), h)
+    h = make()
+    h.port = Flaky(ME, hold=["UPSTREAM_TIMEOUT"])
+    a = await open_case(h, N_A, CIT_A)
+    await confirm(h, N_A, CIT_A, a[0])
+    check("hold in 504 (esito incerto): niente cancel e lo slot non e' segnato come preso",
+          not cancels(h, CIT_A) and a[0] not in getattr(h.mod, "_gone", set)(), h)
+    await confirm(h, N_A, CIT_A, a[0])  # il cittadino (o il watchdog del CUP) rimanda lo stesso confirm
+    check("... il confirm rimandato fa l'hold e la ricevuta",
+          h.world.hold_calls == [a[0]] and len(h.out(CIT_A, "booking.receipt")) == 1, h)
+    h = make()
+    h.port = Flaky(ME, hold=["DUPLICATE"])
+    a = await open_case(h, N_A, CIT_A)
+    await confirm(h, N_A, CIT_A, a[0])
+    check("hold DUPLICATE (gia' sul Ledger): nessun cancel", not cancels(h, CIT_A), h)
+
+    h = make()
+    h.port = Flaky(ME, commit=["STALE_FENCE"], world=h.world)
+    a = await open_case(h, N_A, CIT_A)
+    await confirm(h, N_A, CIT_A, a[0])
+    check("commit rifiutato subito dal Relay (STALE_FENCE): una riprova dell'hold, una ricevuta, nessun cancel",
+          h.world.hold_calls == [a[0], a[0]] and len(h.out(CIT_A, "booking.receipt")) == 1
+          and not cancels(h, CIT_A), h)
+
+    h = make()
+    h.port = Flaky(ME, history_fails=1)
+    try:
+        await open_case(h, N_A, CIT_A)
+        crashed = False
+    except Exception:  # noqa: BLE001 - e' proprio quello che la prova esclude
+        crashed = True
+    check("history in 504 al primo giro: nessun crash, le offerte partono", not crashed and len(offered(h, CIT_A)) == 3, h)
+
+
 def segni() -> None:
     print("Slot non liberi: scadenza e proprietario dei segni")
     h = make()
     mod, clock = h.mod, [1000.0]
+    if not hasattr(mod, "_mark_gone"):
+        check("il consultorio segna gli slot non liberi (tenuti, pieni, passati, prenotati)", False)
+        return
     mod.monotonic = lambda: clock[0]
     mod._mark_gone("S-held", "held", "N-X")
     mod._mark_gone("S-full", "full")
@@ -443,6 +535,7 @@ async def run() -> None:
     await attesa_della_risposta()
     await due_cittadini()
     await ricerche_dei_cup()
+    await rifiuti_del_relay()
     segni()
     print(f"\n{'TUTTO OK' if not tf.FAILS else str(len(tf.FAILS)) + ' FALLITE'}")
     sys.exit(1 if tf.FAILS else 0)
