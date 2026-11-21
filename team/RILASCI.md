@@ -13,17 +13,17 @@ Chi rilascia aggiunge la riga **subito dopo** `city deploy` / `city rollback`, n
 
 ## Online ora
 
-Controllato con `city --json status` alle 13:11 UTC.
+Controllato con `city --json status` alle 13:19 UTC.
 
 | Agente | ID | Versione | Dalle (UTC) | Deployment | Rollback a |
 |---|---|---|---|---|---|
 | gp | `agent:rng5wcrzvhsj` | 1.0.8 | 12:54 | `dep-2d32afeb19854e3caaa323037142db3d` | 1.0.7 |
-| booking_centre | `agent:ez8cb7j167p2` | 1.0.27 (#118, senza #119) | 12:07 | `dep-dd35e91a32ac49fe948493ddac02d1f9` | 1.0.26 secondo build (con #119) o 1.0.25 |
-| hospital | `agent:bb01ggxymm05` | 1.0.7 | 10:47 | `dep-bbe98f223dff429490fb412e3eaa7e39` | 1.0.6 |
+| booking_centre | `agent:ez8cb7j167p2` | 1.0.28 (#137) | 13:19 | `dep-2f0dac5109094d3fb1b4793dbc9d6867` | 1.0.27 |
+| hospital | `agent:bb01ggxymm05` | 1.0.8 (#142) | prima delle 13:18 | non annotato (Andrei) | 1.0.7 |
 | specialist | `agent:sh35cbsy287d` | 1.0.11 | 13:10 | `dep-086fb4eecd7443579088651be26d69b7` | 1.0.10 |
 | family_counseling | `agent:nkh372rd16yq` | 1.0.14 | 11:45 | `dep-a3b16f15ea954d64814b20edde0e05f6` | 1.0.13 |
 
-Prossimi numeri (card su `main`): CUP 1.0.28, GP 1.0.9, ospedale 1.0.8, specialist 1.0.12, consultorio 1.0.15.
+Prossimi numeri (card su `main`): CUP 1.0.29, GP 1.0.9, ospedale 1.0.9, specialist 1.0.12, consultorio 1.0.15.
 Scale: **tutti e cinque un pod, concorrenza 32** (13:11). `city --json status <agente>` mostra lo scale: dopo ogni deploy controllalo e, se non è 1-1 c32, riapplica `city scale <agente> --min 1 --max 1 --concurrency 32` (il deploy dello specialist delle 13:10 lo ha tenuto).
 Le ondate di cittadini arrivano ai minuti :11, :31 e :51: niente deploy né scale nei 10 minuti dopo.
 
