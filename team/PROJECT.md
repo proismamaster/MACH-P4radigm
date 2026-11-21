@@ -5,6 +5,7 @@
 ## Stato attuale (21/11 ore 08:30, freeze fino alle 10:00)
 
 - **Classifica: Boscovich 19° con 3467.** Il 9° (finale) è Ambrogio con 3789: mancano 322 punti. Dal 15° al 18° siamo a meno di 165. Dalle 10:00 alle 16:00 livello 8 con impostori e cambio di regola P1-P3.
+- **Aggiornamento 11:10 (locali):** i rilasci e le versioni online sono in `team/RILASCI.md` (le righe qui sotto sono delle 08:30). **Consultorio 1.0.10 online dalle 10:06 UTC** (attesa della risposta del Ledger, slot rifiutato mai riproposto, EXPIRED/STALE_FENCE con recupero); `team/PROBLEMS.md` ha i tempi per fase e `tools/misura_latenze.js` li rimisura dalla console.
 - **Online (tutti visibili):** CUP 1.0.23, **GP 1.0.5 dalle 08:29** (pubblicato da Alberto durante il freeze: il Ledger risponde in 7-9 minuti e il GP perdeva un giro per ogni ricetta, vedi `team/REVISIONE.md`), ospedale 1.0.4, specialist 1.0.4, consultorio 1.0.8.
 - **Su `main`, da pubblicare alle 10:00** (tutti i test verdi: 21 file, test_facility TUTTO OK per ospedale e consultorio):
   - CUP 1.0.24 + **PR #86** (impostori: partner da `city.find` solo con ruolo della famiglia giusta e `no_clinical_advice`, reputazione più alta prima). La #86 è già aggiornata con `main`: si unisce senza conflitti.
