@@ -1,5 +1,17 @@
 # Journal (la voce più recente in alto)
 
+## 2026-11-21 12:08 — Abed — CUP: partner incompatibili e scadenza delle alternative
+
+**Fatto**
+- Integrato il lavoro della #86. Un partner che l'Index segnala come incompatibile per ruolo o servizio resta escluso anche se il CUP lo conosce già o lo trova nel ring.
+- Dopo un rifiuto per scadenza, la ricerca delle alternative locali usa il termine della pratica. Il test parte dal testo del caso 3130005 e simula agenda e disponibilità.
+
+**Problemi**
+- Il controllo dell'Index usa i metadati esposti dall'SDK. Il risultato in gara va verificato sulle nuove ricerche e sulle ricevute.
+
+**Prossimo passo**
+- Review della PR, poi rilascio coordinato. Seguire i casi cross-ASST e quelli con rifiuto per scadenza.
+
 ## 2026-11-21 12:05 — Alberto (Hhapca, con Claude) — Consultorio 1.0.12 verificato in sola lettura; correzione del ramo `past` pronta
 
 **Fatto**
@@ -155,6 +167,15 @@
 - 10:15: in console tempo cittadino → ricetta (GP) e `need.request` → prima offerta (CUP), ricerche ai partner per caso (≤ 6), `past`/`EXPIRED`, ricevute.
 - Riga `facts` MACH-1.3 per ospedale, specialist e consultorio su Discord.
 
+## 2026-11-21 04:15 — Andrei (Claude) — CUP: protezione dagli impostori (pronta, da pubblicare alle 10:00)
+
+**Fatto**
+- Le offerte dei partner erano già controllate (solo da chi abbiamo interrogato, `request_id`, `facility` = mittente, procedura, priorità, scadenza, riserva U, lingua/genere/giorni del medico dalla tabella). Il buco era la scelta dei partner da `city.find`: bastava la capability.
+- `_cup_trusted_peers`: ruolo della famiglia giusta (fisiatria: hospital/facility; cardiologia: specialist_care/specialist/facility), `no_clinical_advice` dichiarato (solo se l'Index riporta il campo per qualcuno, così non svuota mai la lista), reputazione più alta prima. Le strutture dell'anello da Discord restano.
+- Test: `tools/test_cup_impostori.py` (nuovo, 3 casi falliscono su main, 2 di controllo). Verdi tutti i test del CUP, `test_l8_ostili`, `test_fix`.
+
+**Prossimo passo**
+- Pubblicare alle 10:00 (non durante il livello 8: troppi deploy fanno perdere messaggi).
 ## 2026-11-21 06:35 — Alberto (Hhapca, con Claude) — Ritardo del Ledger: meno passaggi in GP, CUP e consultorio
 - Misurato in console (04:43-05:15 UTC, messaggi degli agenti): il Ledger risponde 7-9 minuti dopo la richiesta e la risposta apre il nostro turno 6-7 minuti dopo, per CUP, GP e consultorio. Iniziato verso le 04:10 UTC. Lo scale a concorrenza 8 non ha cambiato niente.
 - Il GP aspettava il `world` prima di ogni ricetta: 84 `world` su 84 senza protocolli né red flag. Il CUP faceva 2-4 giri di Ledger prima di offrire e mandava 25 ricerche ai partner per caso (550 in 26 minuti, 1 offerta utile).
