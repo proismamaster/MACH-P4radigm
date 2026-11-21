@@ -189,6 +189,7 @@ class CupRecoveryTests(unittest.IsolatedAsyncioTestCase):
         cls.brain = load_brain()
 
     async def asyncSetUp(self):
+        self.brain._CUP_RECENT_OFFERS.clear()
         role = patch.dict(os.environ, {"CITY_ROLE": "booking_centre"})
         role.start()
         self.addCleanup(role.stop)
