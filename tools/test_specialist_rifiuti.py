@@ -111,5 +111,20 @@ done = [*late, msg(24, ME, LEDGER, "commit hold_id=H-L consent_ref=cx-3 fence=1"
 asyncio.run(mod._facility(city, nudge, [*done, nudge], reports=True, hold_self=False))
 check("commit gia' mandato: nessun secondo commit", not [t for to, t in city.sent if to == LEDGER and t.startswith("commit ")])
 
+print("Specialist - P2: hold cross-ASST con il consenso cross_asst")
+def hold_after(confirm_text):
+    city = FakeCity()
+    row = msg(40, CUP, ME, confirm_text)
+    asyncio.run(mod._facility(city, row, [row], reports=True, hold_self=False))
+    return [t for to, t in city.sent if to == LEDGER and t.startswith("hold ")]
+holds = hold_after(f"confirm offer_id=of-P slot_id=S-P citizen={CIT} consent_ref=cons-9-booking "
+                   f"cross_asst_consent_ref=cx-9 prescription_number=RX-9")
+check("consent_ref di prenotazione + cross_asst_consent_ref: hold con cx-9", holds and "consent_ref=cx-9" in holds[0].split())
+holds = hold_after(f"confirm offer_id=of-Q slot_id=S-Q citizen={CIT} consent_ref=cons-8-booking "
+                   f"cross_consent_ref=cx-8 prescription_number=RX-8")
+check("cross_consent_ref (nome del kit): hold con cx-8", holds and "consent_ref=cx-8" in holds[0].split())
+holds = hold_after(f"confirm offer_id=of-R slot_id=S-R citizen={CIT} consent_ref=cx-7 prescription_number=RX-7")
+check("MACH-1.1, solo consent_ref (gia' cross_asst): hold con cx-7", holds and "consent_ref=cx-7" in holds[0].split())
+
 print("FALLITE:", FAILS if FAILS else "nessuna")
 sys.exit(1 if FAILS else 0)
