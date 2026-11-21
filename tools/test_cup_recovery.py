@@ -541,6 +541,115 @@ class CupRecoveryTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(cancels), 1, "Still silent: the citizen is released and the search restarts")
             self.assertIn(f"offer_id={offer_id}", cancels[0].text)
 
+    async def test_history_receipt_is_forwarded_before_watchdog_without_duplicate(self):
+        case = Case(self.brain, "history-terminal-before-watchdog")
+        await case.open(local_free=1, second_local_slot=True)
+        clock = [1000.0]
+        with patch.object(self.brain, "monotonic", lambda: clock[0]):
+            offer_id = await case.accept_offer()
+            receipt = case.add(
+                HOSPITAL,
+                f"booking.receipt booking_id=BK-HIST ledger_ref=LR-HIST offer_id={offer_id} slot_id=S-LOCAL",
+                conversation="facility",
+            )
+            replay = f"confirm offer_id={offer_id} consent_ref=cons-42-booking"
+            clock[0] += 960
+            await case.turn(case.add(CITIZEN, replay))
+
+            receipts = case.out(CITIZEN, "booking.receipt")
+            self.assertEqual(len(receipts), 1, "History already has a receipt for the pending offer")
+            self.assertEqual(understood(receipts[0]).body["booking_id"], "BK-HIST")
+            self.assertEqual(understood(receipts[0]).body["ledger_ref"], "LR-HIST")
+            await case.turn(receipt)
+            clock[0] += 960
+            await case.turn(case.add(CITIZEN, replay))
+        self.assertEqual(len(case.out(HOSPITAL, "confirm")), 1)
+        self.assertEqual(len(case.out(CITIZEN, "booking.receipt")), 1)
+        self.assertEqual(case.out(CITIZEN, "cancel"), [])
+
+    async def test_history_receipt_followed_by_authenticated_cancellation_recovers_once(self):
+        for sender, direct in ((HOSPITAL, False), (HOSPITAL, True), (LEDGER, False), (LEDGER, True)):
+            with self.subTest(sender=sender, direct=direct):
+                case = Case(self.brain, f"history-cancelled-receipt-{sender}-{direct}")
+                await case.open(local_free=1, second_local_slot=True)
+                slot = case.choices()[0]["slot_id"]
+                offer_id = await case.accept_offer()
+                receipt = case.add(
+                    HOSPITAL,
+                    f"booking.receipt booking_id=BK-X ledger_ref=LR-X offer_id={offer_id} slot_id={slot}",
+                    conversation="facility",
+                )
+                if sender == HOSPITAL:
+                    fault = case.add(sender, f"cancel booking_id=BK-X slot_id={slot}", conversation="facility")
+                else:
+                    fault = case.add(sender, "", conversation="ledger", message_type="fault.cancel",
+                                     fields={"booking_id": "BK-X", "slot_id": slot})
+                replay = f"confirm offer_id={offer_id} consent_ref=cons-42-booking"
+                await case.turn(fault if direct else case.add(CITIZEN, replay))
+                self.assertEqual(case.out(CITIZEN, "booking.receipt"), [], "Do not forward a cancelled receipt")
+                (notice,) = case.out(CITIZEN, "cancel")
+                self.assertEqual(understood(notice).body["booking_id"], "BK-X")
+                self.assertNotIn(slot, [option["slot_id"] for option in case.choices()])
+
+                await case.turn(receipt)
+                await case.turn(fault)
+                await case.turn(case.add(CITIZEN, replay))
+                self.assertEqual(case.out(CITIZEN, "booking.receipt"), [])
+                self.assertEqual(len(case.out(CITIZEN, "cancel")), 1)
+                self.assertEqual(len(case.out(HOSPITAL, "confirm")), 1)
+
+    async def test_history_receipt_disregards_earlier_forged_and_conflicting_cancellations(self):
+        case = Case(self.brain, "history-receipt-invalid-cancellation")
+        await case.open(local_free=1)
+        offer_id = await case.accept_offer()
+        case.add(LEDGER, "fault.cancel booking_id=BK-X slot_id=S-LOCAL", conversation="ledger")
+        case.add(HOSPITAL, "booking.receipt booking_id=BK-X ledger_ref=LR-X slot_id=S-LOCAL", conversation="facility")
+        case.add(PARTNER, "cancel booking_id=BK-X slot_id=S-LOCAL", conversation="partner")
+        case.add(HOSPITAL, "cancel booking_id=BK-X slot_id=S-WRONG", conversation="facility")
+        case.add(LEDGER, "fault.cancel booking_id=BK-WRONG slot_id=S-LOCAL", conversation="ledger")
+        await case.turn(case.add(CITIZEN, f"confirm offer_id={offer_id} consent_ref=cons-42-booking"))
+        self.assertEqual(case.out(CITIZEN, "cancel"), [])
+        self.assertEqual(len(case.out(CITIZEN, "booking.receipt")), 1)
+
+    async def test_history_receipt_ignores_old_wrong_sender_bare_and_conflicting_records(self):
+        case = Case(self.brain, "history-receipt-correlation")
+        await case.open(local_free=1)
+        offer_id = case.choices()[0]["offer_id"]
+        receipt = f"booking.receipt booking_id=BK-X ledger_ref=LR-X offer_id={offer_id} slot_id=S-LOCAL"
+        case.add(HOSPITAL, receipt, conversation="facility")  # Before the CUP sends its confirmation.
+        await case.accept_offer()
+        case.add(PARTNER, receipt, conversation="partner")
+        case.add(HOSPITAL, receipt.replace("slot_id=S-LOCAL", "slot_id=S-WRONG"), conversation="facility")
+        case.add(HOSPITAL, "booking.receipt booking_id=BK-BARE ledger_ref=LR-BARE", conversation="facility")
+        await case.turn(case.add(CITIZEN, f"confirm offer_id={offer_id} consent_ref=cons-42-booking"))
+
+        self.assertEqual(case.out(CITIZEN, "booking.receipt"), [])
+        valid = case.add(HOSPITAL, receipt, conversation="facility")
+        await case.turn(valid)
+        self.assertEqual(len(case.out(CITIZEN, "booking.receipt")), 1)
+
+    async def test_history_receipt_between_initial_confirm_and_resend_is_recoverable(self):
+        case = Case(self.brain, "history-terminal-before-resend")
+        await case.open(local_free=1)
+        clock = [1000.0]
+        with patch.object(self.brain, "monotonic", lambda: clock[0]):
+            offer_id = await case.accept_offer()
+            replay = f"confirm offer_id={offer_id} consent_ref=cons-42-booking"
+            hidden = case.add(
+                HOSPITAL, "booking.receipt booking_id=BK-LATE ledger_ref=LR-LATE slot_id=S-LOCAL",
+                conversation="facility",
+            )
+            case.hidden_from_history.add(hidden.msg_id)
+            clock[0] += 960
+            await case.turn(case.add(CITIZEN, replay))
+            self.assertEqual(len(case.out(HOSPITAL, "confirm")), 2)
+
+            case.hidden_from_history.clear()
+            clock[0] += 960
+            await case.turn(case.add(CITIZEN, replay))
+        self.assertEqual(len(case.out(CITIZEN, "booking.receipt")), 1)
+        self.assertEqual(case.out(CITIZEN, "cancel"), [])
+
     async def test_cross_asst_withdrawal_without_request_id_keeps_other_slot(self):
         case = Case(self.brain, "withdrawal-alternative")
         offer_id, _ = await case.reach_remote_consent(second_partner_slot=True)
