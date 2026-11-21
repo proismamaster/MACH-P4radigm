@@ -5,6 +5,7 @@ L'esempio del kit usa doctor_id=D-3: prima della correzione il CUP scartava tutt
 sia della propria ASST (fitting) sia dei partner (_cup_partner_slots).
 """
 
+import asyncio
 import importlib.util
 import os
 import sys
@@ -121,6 +122,50 @@ dec = [Message(type="chat", sender=CIT, recipient=CUP_ID, msg_id=f"c{i}", need_i
 check("offerte aperte prima del rifiuto", len(cup._cup_case([offer_msg], CUP_ID, CIT).offers) == 2)
 check("rifiuto di una: ne resta una", list(cup._cup_case([offer_msg, dec[0]], CUP_ID, CIT).offers) == ["of-a-2"])
 check("rifiuto di tutte: nessuna offerta aperta (il CUP riparte)", cup._cup_case([offer_msg, *dec], CUP_ID, CIT).offers == {})
+
+print("CUP - richiesta al partner con i giorni espliciti")
+
+
+class SearchCity:
+    agent_id = CUP_ID
+
+    def __init__(self):
+        self.messages = []
+
+    async def find(self, query):
+        return []
+
+    async def say(self, recipient, text):
+        self.messages.append(text)
+        return f"out-{len(self.messages)}"
+
+    async def history(self, *, need_id):
+        return []
+
+
+async def search_messages(days_field):
+    inbound = Message(
+        type="chat", sender=CIT, recipient=CUP_ID, msg_id="days-source", need_id="N-DAYS",
+        body={"text": f"need.request prescription_number=prescription_number-TEST {days_field}"},
+    )
+    city = SearchCity()
+    await cup._cup_cross_asst(
+        city, inbound, [inbound], cup._Sent(), CIT, "VIS-FIS", "B", NOW,
+        "prescription_number-TEST", set(), replacing=False,
+    )
+    return [cup.fields_of(text) for text in city.messages if text.startswith("need.request ")]
+
+
+for day_format in ("days=Wed/mon/mon/sat", "days=[Wed, mon, mon, sat]"):
+    messages = asyncio.run(search_messages(day_format))
+    check(f"invia solo criteri di ricerca e giorni normalizzati da {day_format}",
+          bool(messages) and all(fields.get("days") == "mon/wed"
+                                and set(fields) == {"service_type", "procedure", "priority", "request_id", "days"}
+                                for fields in messages))
+messages = asyncio.run(search_messages(""))
+check("omette days se il cittadino non indica giorni",
+      bool(messages) and all("days" not in fields for fields in messages))
+
 
 print("FALLITE:", FAILS if FAILS else "nessuna")
 sys.exit(1 if FAILS else 0)

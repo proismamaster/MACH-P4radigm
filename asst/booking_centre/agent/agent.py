@@ -538,7 +538,7 @@ def _cup_days(chat: list[Message], citizen: str) -> set[str]:
         else:
             match = re.search(r"(?:^|\s)days=(\[[^\]]*\]|[^\s]+)", row.text)
             raw = value if isinstance(value, str) else (match[1] if match else "")
-            days = set(re.split(r"[\s,;|\[\]]+", raw.lower()))
+            days = set(re.split(r"[\s,;/|\[\]]+", raw.lower()))
         if recognized := days & _AGENDA_DAYS:
             return recognized
     return set()
@@ -1082,6 +1082,8 @@ async def _cup_cross_asst(
             peer.agent_id for peer in peers
             if peer.role == "facility" and service in peer.capabilities and peer.agent_id.startswith("agent:")
         ]
+        days = _cup_days(chat, citizen)
+        days_field = "/".join(day for day in _AGENDA_WEEKDAYS if day in days)
         for partner in _cup_partner_candidates(found, service, local, _lang(chat)):
             request_id = f"rq-{token_hex(8)}"
             search = f"need.request service_type={service} procedure={procedure} priority={priority} request_id={request_id}"
@@ -1089,6 +1091,8 @@ async def _cup_cross_asst(
                 search += f" lang={language}"
             if gender := _gender(chat):
                 search += f" gender_preference={gender}"
+            if days_field:
+                search += f" days={days_field}"
             if await _cup_send(city, message, cache, partner, search):
                 searches[partner] = request_id
     elif cache.partner_search_started is None:

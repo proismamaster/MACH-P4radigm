@@ -1,5 +1,16 @@
 # Journal (la voce più recente in alto)
 
+## 2026-11-21 01:06 — Abed — Giorni richiesti nelle ricerche cross-ASST
+
+**Fatto**
+- Il CUP invia ai partner solo i giorni feriali indicati dal cittadino, nel formato `days=mon/wed`. Le regressioni locali verificano normalizzazione, assenza del campo e contenuto della richiesta.
+
+**Problemi**
+- È in lavorazione la ripresa della ricerca dopo il rifiuto dell'ultima offerta.
+
+**Prossimo passo**
+- Dopo la revisione e il rilascio, verificare in Arena una ricerca cross-ASST con giorni richiesti.
+
 ## 2026-11-20 22:53 — Abed — Rinnovo P1 e disponibilità cross-ASST del CUP
 
 **Fatto**
