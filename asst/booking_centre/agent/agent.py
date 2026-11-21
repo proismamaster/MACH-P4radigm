@@ -469,9 +469,17 @@ def _ahead(now: datetime, at: datetime) -> timedelta:
     return gap
 
 
+# The citizen confirms 19 agenda hours after the offer (median of 22 confirms, 3-35; 71 failed
+# journeys 10:08-11:08 UTC): 12 confirmed slots were already past. B prefers slots at least that far.
+_B_LEAD = timedelta(hours=20)
+
+
 def _lead(priority: str | None) -> timedelta:
-    """B and U windows are short: the soonest slot past the minimum wins. Elsewhere 30 hours first."""
-    return _min_lead(priority) if priority in ("B", "U") else _LEAD
+    """U: the soonest slot past the minimum. B: slots the citizen can still reach when it confirms
+    come first (the window from the prescription leaves ~27 hours). Elsewhere 30 hours first."""
+    if priority == "U":
+        return _min_lead(priority)
+    return _B_LEAD if priority == "B" else _LEAD
 
 
 # Console 21/11: the citizen writes to the CUP 19-20 real minutes (agenda hours) after the GP's
