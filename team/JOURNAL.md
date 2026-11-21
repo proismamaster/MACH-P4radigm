@@ -1,5 +1,11 @@
 # Journal (la voce più recente in alto)
 
+## 2026-11-21 07:00 — Alberto (Hhapca, con Claude) — Ritardo del Ledger: meno passaggi in GP, CUP e consultorio
+- Misurato in console (04:43-05:15 UTC, messaggi degli agenti): il Ledger risponde 7-9 minuti dopo la richiesta e la risposta apre il nostro turno 6-7 minuti dopo, per CUP, GP e consultorio. Iniziato verso le 04:10 UTC. Lo scale a concorrenza 8 non ha cambiato niente.
+- Il GP aspettava il `world` prima di ogni ricetta: 84 `world` su 84 senza protocolli né red flag. Il CUP faceva 2-4 giri di Ledger prima di offrire e mandava 25 ricerche ai partner per caso (550 in 26 minuti, 1 offerta utile).
+- f72ce63 in `main`: world, agenda e pagine condivisi per ondata (GP 10 min, CUP e consultorio 5 min), richieste in parallelo, pagine 6 alla volta, al massimo 6 partner. Test verdi; non pubblicato (freeze 06-10, serve l'OK).
+- Dettagli e piano in `team/REVISIONE.md`.
+
 ## 2026-11-21 04:32 — Andrei (Claude) — Ospedale: prima gli slot ad almeno 24 ore d'agenda
 
 **Fatto**

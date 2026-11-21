@@ -1,57 +1,64 @@
-# Revisione del codice — 21/11 ore 05:50 (Alberto, con Claude)
+# Revisione del codice — 21/11 ore 07:00 (Alberto, con Claude)
 
-Base: `main` a 597c313. Online: CUP 1.0.23, GP 1.0.4, consultorio 1.0.8, ospedale 1.0.4, specialist 1.0.4.
-Fonte dei fatti: 200+ percorsi letti da `/v1/team/journeys/<need_id>` e gli export JSON del 21/11, test in `tools/`, protocollo MACH-1.3 (Discord).
+Base: `main` a f72ce63. Online: CUP 1.0.23, GP 1.0.4, consultorio 1.0.8, ospedale 1.0.4, specialist 1.0.4 (le correzioni di e2d1518 e f72ce63 non sono ancora pubblicate).
+Fonte dei fatti: percorsi di `/v1/team/journeys/<need_id>`, messaggi di CUP, GP e consultorio da `/v1/team/agents/<id>/messages` (21/11 04:18-05:15 UTC), scoreboard, test in `tools/`, protocollo MACH-1.3.
 
 Legenda: ✅ gestito e provato (test o console) · 🟡 gestito ma non provato in Arena · ❌ non gestito / bug noto.
 
-## 1. Il percorso, passo per passo
+## 1. La causa principale, confermata (05:00-05:15 UTC)
 
-| Passo | Chi | Come è gestito | Stato |
+| Fatto | Misura | Fonte |
+|---|---|---|
+| Il Ledger risponde tardi | agenda p50 537 s, ricetta p50 540 s, world p50 478 s (35 richieste del CUP); stesso ritardo per GP (`world`, `prescribe` 440-470 s) e consultorio (`hold`, `commit`, `agenda` 445-585 s) | messaggi degli agenti |
+| La risposta del Ledger apre il nostro turno tardi | dopo un `slots`/`agenda`/`prescription` il CUP agisce 360-450 s dopo, senza altri messaggi in mezzo | messaggi del CUP |
+| Il GP non è in coda per colpa sua | 34 messaggi su 221 a meno di 1 s l'uno dall'altro; 35-49 messaggi ogni 10 minuti | messaggi del GP |
+| I cittadini rispondono presto | offerta → risposta in 4-5 minuti | percorsi |
+| Il ritardo è cominciato alle 04:10 UTC | GP: p50 22 s alle 03:40, 246 s alle 04:10, 338 s alle 04:20 | percorsi |
+| Tutte le squadre salgono piano | +29 / +95 punti in 4 minuti, noi 2848 (18° su 26) | `/v1/scoreboard` |
+
+Conclusione: ogni passaggio (noi → Ledger → noi, noi → struttura) costa oggi 6-9 minuti reali, cioè 6-9 ore d'agenda. Il numero di passaggi decide quante prenotazioni restano dentro la finestra B (48 ore dalla nascita del need).
+
+Sprechi nostri, confermati:
+- **GP**: aspettava il `world` prima di ogni ricetta. 84 risposte `world` su 84 erano una pagina di slot, senza tabella dei protocolli né red flag. Costo: un giro di Ledger per cittadino.
+- **CUP**: chiedeva ricetta + agenda, poi il world, poi una pagina alla volta: 2-4 giri prima della prima offerta.
+- **CUP → partner**: 550 ricerche in 26 minuti (22 × 25 partner), ~500 risposte (315 `no_availability`, 99 "Ricevuto"), ognuna un turno con fino a 7 letture della cronologia. 45 offerte da 7 partner, 1 arrivata a un cittadino, 0 confirm ai partner.
+- Lo scale a concorrenza 8 (05:48) non ha cambiato i tempi: il collo di bottiglia non era il pod.
+
+## 2. Correzioni in `main` (da pubblicare)
+
+| Commit | Agente | Cosa | Effetto stimato con il ritardo di oggi |
 |---|---|---|---|
-| Primo messaggio, testo libero | GP | parole chiave → `symptom_code`, una sola domanda di chiarimento | ✅ (102 `protocol_match +2`) |
-| Red flag (dolore al petto, forza alle gambe) | GP | lista fissa + parafrasi (1.0.4) + red flag del `world` con 2/3 delle parole | ✅ test_gp_l8, test_l8_ostili |
-| Red flag nascosta solo nel `world` | GP | il GP aspetta il `world` 6 s e non prescrive mai senza averlo letto | 🟡 se il `world` tarda oltre 6 s il GP aspetta il turno successivo (prima restava muto: 201) |
-| Ricetta solo dopo `prescribed` | GP | sì, mai annunciata prima | ✅ |
-| Rinnovo P1 (`PRESCRIPTION_EXPIRED`) | CUP → GP | il CUP chiede il rinnovo, il GP emette il nuovo numero e il CUP rilegge sul Ledger | ✅ test_cup_recovery |
-| Giorni e genere | CUP | `days=`, giorni scritti a parole e abbreviati (`lun/mer/ven`), rifiuti `day`/`gender` imparati, un'offerta per giorno della settimana | 🟡 i rifiuti dei cittadini non sono sempre coerenti col testo (318) |
-| Finestra di priorità | CUP | B/D contate dalla ricetta (~20 ore d'agenda prima del messaggio al CUP), in giorni d'agenda | 🟡 MACH-1.3 conferma: la scadenza parte dal primo messaggio al medico |
-| Anticipo degli slot | CUP, consultorio, ospedale | minimo 4 ore; preferenza 30 ore solo per D e senza priorità; per B/U il primo slot dopo le 4 ore | 🟡 |
-| Partner (altre ASST) | CUP | 25 partner + `city.find`, attesa 20 s, date inoltrate in UTC con la Z | ✅ (audit `false_attribute` corretto in 1.0.23) |
-| Confirm → hold → commit → ricevuta | strutture | riprova del hold su `EXPIRED`/`STALE_FENCE` (consultorio), scadenza ricontrollata al confirm (CUP) | ❌ vedi 2.1 |
-| Check-in, referto, consenso `report_sharing` | ospedale, specialist | sì | ✅ test_fix, test_facility |
-| Impostori, injection | consultorio (modalità sicura), CUP (#86 alle 10:00) | filtro solo su chi è fuori dal ring E sospetto | 🟡 elenco del ring incompleto |
-| Cambio di regola P1/P2/P3 | tutti | `rules` riletto per P2 (consultorio), riserva U esclusa sotto U, rinnovo P1 | ✅ test_mach12_struttura |
+| f72ce63 | GP | il `world` letto per un cittadino vale 10 minuti per tutta l'ondata: la ricetta parte al primo turno | -1 giro (~14 ore d'agenda) per ogni percorso |
+| f72ce63 | CUP | agenda e pagine condivise per ondata (5 minuti); ricetta, agenda e pagina 1 nello stesso turno; pagine mancanti 6 alla volta | prima offerta dopo 1 giro invece di 2-4 |
+| f72ce63 | CUP | al massimo 6 partner per ricerca (prima quelli che offrono); solo il turno che manda le ricerche aspetta | ~4 volte meno traffico e turni |
+| f72ce63 | consultorio | agenda e pagina 1 condivise per ondata, anche per le ricerche degli altri CUP (MACH-1.3: 10 s) | prima offerta senza giro di Ledger |
+| e2d1518 | CUP, consultorio | anticipo minimo 10 ore (U 4), margine 1 ora al confirm | simulazione: 19/21 prenotati invece di 14/21 |
+| b5dcb99 | consultorio, ospedale, CUP | finestra MACH-1.3 (`earliest=`/`deadline=`), B senza preferenza a 30 ore, R7 slot passati al confirm | — |
 
-## 2. Problemi aperti, in ordine di peso
+Prove: 21 file di test verdi (nuovo `tools/test_cup_ritardo.py`, `test_gp_l8.py` esteso), `test_facility` verde su consultorio e ospedale. Conformance locale: fallisce solo `custody.ack`, come per l'agente di riferimento del kit (JOURNAL 02:45); la conferma vera è al deploy.
 
-### 2.1 ❌ Il CUP elabora il confirm 4 minuti dopo (la perdita più grande rimasta)
-Console 21/11 L7-L8: 319 confirm alle 04:17:06, risposta del CUP alle 04:21:05; 310 primo confirm alle 04:02:09 mai elaborato, secondo alle 04:18:10, risposta alle 04:22:39. Quattro minuti reali sono quattro ore d'agenda: lo slot passa e arriva `slot_expired` o `facility_cancelled`. Su 61 percorsi con confirm, 2 ricevute.
+Rischi noti delle correzioni:
+- Pagine condivise vecchie fino a 5 minuti: uno slot preso nel frattempo viene rifiutato dalla struttura e il CUP propone il successivo.
+- Se il Ledger mettesse red flag nel `world` a metà ondata, il GP le vedrebbe entro 10 minuti (non subito).
 
-Causa più probabile, non confermata: i turni del CUP sono lunghi (attesa partner 20 s, attese del Ledger fino a 6 s, paging fino a 60 s) e il pod li serve in fila. Il CUP ha 5218 messaggi.
+## 3. Problemi aperti
 
-**Fatto alle 05:48** (approvato): `city scale booking_centre --min 1 --max 1 --concurrency 8` e lo stesso per `gp`. Per tornare indietro: `--concurrency 1`. Da verificare in console che il confirm venga elaborato in secondi. Un solo pod tiene la memoria condivisa; il codice ha già un lock per need.
-Correzione nel codice per le 10:00: un turno di `confirm` non deve aspettare partner o pagine; abbassare `_PAGING_SECONDS` a 20.
+| # | Stato | Problema | Nota |
+|---|---|---|---|
+| 3.1 | ❌ | Con 6-9 minuti per passaggio una B (48 ore) non entra: GP ~3 passaggi, CUP 2-6, confirm → ricevuta 5-6 | dipende dalla piattaforma; le correzioni tolgono 2-4 passaggi |
+| 3.2 | 🟡 | La scadenza B/D del CUP parte da "messaggio al CUP − 21 ore": se il GP risponde tardi la stima è troppo avanti | con il GP al primo turno l'errore si riduce |
+| 3.3 | 🟡 | hold → commit: due giri di Ledger obbligati (il commit vuole `hold_id` e `fence` del `held`) | non si può accorciare |
+| 3.4 | 🟡 | Elenco del ring incompleto; riga `facts` MACH-1.3 da postare su Discord | Alberto |
+| 3.5 | ❌ | `test_facility` non vale per lo specialist (48 fallite, file non toccato) | test pensato per ospedale e consultorio |
 
-### 2.2 🟡 Strutture e finestra B dei CUP esterni
-Consultorio (`_LEAD` 30 h) e ospedale (`_DECISION_LEAD` 24 h) preferiscono slot lontani anche per una ricerca B di un altro CUP: oltre la scadenza vera (circa 20 ore rimaste). MACH-1.3: chi chiede manda `deadline=` e `after=` con data e ora; le strutture devono rispettarli. Oggi il consultorio legge `after=`/`before=` solo come ora del giorno (HH:MM): un `after=` con data viene ignorato senza errori.
+## 4. Cosa non posso confermare
+- Se il ritardo di consegna sia uguale per tutte le squadre: vedo solo i nostri messaggi. Lo scoreboard dice che tutte salgono piano.
+- Se il nostro traffico verso i partner contribuisca al ritardo della città.
+- L'effetto reale delle correzioni: si vede solo dopo il deploy.
 
-### 2.3 🟡 Giorni e genere non dichiarati
-"Solo in alcuni giorni" senza nomi: il CUP impara solo dai rifiuti. Con offerte su giorni diversi e più di una tornata può bastare; i rifiuti `day` su un giorno nominato dal cittadino (318) restano non spiegati.
-
-### 2.4 🟡 Prima risposta delle strutture 8-14 minuti
-Coincide con l'orario di chiusura (08:00-18:00 d'agenda): vale per tutte le squadre.
-
-### 2.5 🟡 Elenco del ring
-18 id nel consultorio, 17 nel CUP. Mancano CUP, GP e consultori delle altre ASST. Con la modalità sicura non blocca nessuno; per MACH-1.3 serve postare una riga `facts` per le nostre tre strutture su Discord.
-
-## 3. Cosa non posso confermare
-- I messaggi del Ledger (`held`, `refused ... code=`) non sono negli export: la causa dei 34 confirm senza risposta resta un'ipotesi (coda del CUP).
-- Le soglie (20 ore d'agenda prima del CUP, 4 ore minime, 30 ore preferite) vengono dai dati di stanotte, non dal kit.
-
-## 4. Piano per le 10:00 (dopo il freeze)
-1. Controllare in console l'effetto dello scale (fatto alle 05:48) sui tempi del confirm.
-2. #86 di Andrei (impostori del CUP).
-3. Confirm del CUP senza attese lunghe; `_PAGING_SECONDS` 20.
-4. Consultorio e ospedale: rispettare `deadline=`/`after=` di MACH-1.3 e, per B, il primo slot dopo le 4 ore.
-5. Riga `facts` MACH-1.3 per ospedale, specialist e consultorio su Discord.
+## 5. Piano
+1. Deploy di GP, CUP e consultorio (serve il tuo OK; il freeze del team va dalle 06:00 alle 10:00).
+2. Subito dopo: misurare in console il tempo citizen → ricetta (GP) e need.request → prima offerta (CUP), e il numero di ricerche ai partner.
+3. #86 di Andrei (impostori del CUP) alle 10:00.
+4. Riga `facts` MACH-1.3 per ospedale, specialist e consultorio su Discord.
+5. Se resta tempo: la stessa lettura condivisa nell'ospedale.
