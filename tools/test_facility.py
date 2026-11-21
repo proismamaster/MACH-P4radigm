@@ -476,12 +476,57 @@ async def prova_e() -> None:
               f"nessuna risposta", elapsed < 3 and not h.out("agent:t77"), h)
 
 
+async def prova_h() -> None:
+    """custody.ack, la causa vera: le prove della conformance non hanno need_id.
+
+    `city.history(need_id=None)` legge TUTTA la casella dell'agente (fino a 5 pagine da 200
+    messaggi firmati, una dopo l'altra). La casella dell'ospedale ha ~1400 messaggi: il turno
+    della prova dura secondi e la suite smette di aspettare il rinnovo del lease dopo 5 s."""
+
+    print("Prova H - messaggio senza need_id: nessuna lettura dell'intera casella")
+    import time
+
+    class BigMailbox(Port):
+        def __init__(self, me: str) -> None:
+            super().__init__(me)
+            self.whole_reads = 0
+
+        async def history(self, *, peer=None, need_id=None):
+            if need_id is None:
+                self.whole_reads += 1
+                await asyncio.sleep(3.0)  # come 5 pagine da 200 messaggi via Relay
+            return await super().history(peer=peer, need_id=need_id)
+
+    for label, body in (("prova della conformance (need.request lab/visit)", "need.request summary=visit"),
+                        ("chat generica", "ciao")):
+        h = Harness("hospital.physiatry", HOSP, World(HOSP))
+        port = BigMailbox(HOSP)
+        h.port = port
+        msg = Message(type="chat", sender="agent:t05/osp-x", recipient=HOSP, msg_id=uuid4().hex,
+                      need_id=None, conversation_id="c-1", body={"text": body})
+        port.log.append(msg)
+        city = City(index=Index(), messages=port, history=port, agent_id=HOSP, inbound=msg)
+        started = time.perf_counter()
+        await h.mod.main(Need(summary=body, message=msg), city)
+        elapsed = time.perf_counter() - started
+        check(f"{label} senza need_id: nessuna lettura della casella intera, turno sotto 1 s "
+              f"({elapsed:.2f} s, letture={port.whole_reads})",
+              port.whole_reads == 0 and elapsed < 1 and not h.out(""), h)
+
+    # Un messaggio vero con need_id continua a funzionare (prova B lo copre per intero).
+    h = Harness("hospital.physiatry", HOSP, World(HOSP))
+    await h.turn(CUP_OWN, CONFIRM)
+    check("con need_id: confirm -> hold, commit e ricevuta come prima",
+          len(h.out(LEDGER, "hold")) == 1 and len(h.out(CUP_OWN, "booking.receipt")) == 1, h)
+
+
 async def run() -> None:
     await prova_a()
     await prova_b()
     await prova_c()
     await prova_d()
     await prova_e()
+    await prova_h()
     print(f"\n{'TUTTO OK' if not FAILS else str(len(FAILS)) + ' FALLITE'}")
     sys.exit(1 if FAILS else 0)
 
