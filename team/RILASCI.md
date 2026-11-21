@@ -13,17 +13,17 @@ Chi rilascia aggiunge la riga **subito dopo** `city deploy` / `city rollback`, n
 
 ## Online ora
 
-Controllato con `city --json status` alle 13:19 UTC.
+Controllato con `city --json status` alle 13:30 UTC.
 
 | Agente | ID | Versione | Dalle (UTC) | Deployment | Rollback a |
 |---|---|---|---|---|---|
 | gp | `agent:rng5wcrzvhsj` | 1.0.8 | 12:54 | `dep-2d32afeb19854e3caaa323037142db3d` | 1.0.7 |
-| booking_centre | `agent:ez8cb7j167p2` | 1.0.28 (#137) | 13:19 | `dep-2f0dac5109094d3fb1b4793dbc9d6867` | 1.0.27 |
-| hospital | `agent:bb01ggxymm05` | 1.0.8 (#142) | prima delle 13:18 | non annotato (Andrei) | 1.0.7 |
+| booking_centre | `agent:ez8cb7j167p2` | 1.0.29 (#137, #147) | 13:30 | `dep-97f5eaf7865f44e9b2b6696549c95932` | 1.0.28 |
+| hospital | `agent:bb01ggxymm05` | 1.0.9 | 13:24 | `dep-e6bc1425d0ad445db4ec950a58b745ff` | 1.0.8 |
 | specialist | `agent:sh35cbsy287d` | 1.0.11 | 13:10 | `dep-086fb4eecd7443579088651be26d69b7` | 1.0.10 |
 | family_counseling | `agent:nkh372rd16yq` | 1.0.14 | 11:45 | `dep-a3b16f15ea954d64814b20edde0e05f6` | 1.0.13 |
 
-Prossimi numeri (card su `main`): CUP 1.0.29, GP 1.0.9, ospedale 1.0.9, specialist 1.0.12, consultorio 1.0.15.
+Prossimi numeri (card su `main`): CUP 1.0.30, GP 1.0.9, ospedale 1.0.10, specialist 1.0.12, consultorio 1.0.15.
 Scale: **tutti e cinque un pod, concorrenza 32** (13:11). `city --json status <agente>` mostra lo scale: dopo ogni deploy controllalo e, se non è 1-1 c32, riapplica `city scale <agente> --min 1 --max 1 --concurrency 32` (il deploy dello specialist delle 13:10 lo ha tenuto).
 Le ondate di cittadini arrivano ai minuti :11, :31 e :51: niente deploy né scale nei 10 minuti dopo.
 
@@ -76,4 +76,8 @@ Le ondate di cittadini arrivano ai minuti :11, :31 e :51: niente deploy né scal
 | 21/11 13:07 | specialist | 1.0.10 | deploy (Ismail/Opus) + scale 32 | `dep-f3413d265c0f4795b90a34a5fbc8e2dd` | `8ece550` | #138: una riga `committed` nuova chiude l'attesa anche se il `booking_id` del Ledger è diverso dall'`hold_id` (caso riprodotto da Abed: la ricevuta non partiva nel turno). Conformance PASS. Online 3 minuti: alle 13:10 la 1.0.11 di Andrei la contiene. |
 | 21/11 13:10 | specialist | 1.0.11 | deploy (Andrei) | `dep-086fb4eecd7443579088651be26d69b7` | `a926139` | #139 sopra l'attesa di Ismail (1.0.10): attesa del Ledger 420 s, rifiuto immediato del Relay sull'hold al CUP, slot presi segnati con cancel `no_capacity` subito, ricerche dei partner da agenda e pagina gia' lette (risposta subito). Card portata a 1.0.11 a mano prima del deploy: la 1.0.10 era gia' online. Conformance PASS (23,3 s). |
 | 21/11 13:11 | hospital | — | `city scale --min 1 --max 1 --concurrency 32` (Ismail/Opus) | — | — | lo scale non era mai stato impostato (default della piattaforma). I turni della conferma aspettano fino a 180 s: un solo pod caldo, come gli altri quattro agenti. |
+| 21/11 13:17 | hospital | 1.0.8 | deploy (Andrei) | `dep-52f91aabb13a409192f537c97397d2ac` | `8e982d3` | #142: ricerche dei CUP partner da agenda e pagina gia' lette in altri casi (fino a 120 s, risposta subito invece di un giro del Ledger), attesa paziente 420 s (era 180), `checked_in` letto nella cronologia. Conformance PASS (28,4 s). |
+| 21/11 13:24 | hospital | 1.0.9 | deploy (Andrei) | `dep-e6bc1425d0ad445db4ec950a58b745ff` | `3360c20` | #145: agenda estrapolata sempre valida per le ricerche dei partner, pagina rinnovata dopo 60 s (senza attesa), check-in senza `booking_id` ricostruito dalla riga `committed`. Conformance PASS (21,8 s). |
+| 21/11 13:19 | booking_centre | 1.0.28 | deploy (Ismail/Opus) | `dep-2f0dac5109094d3fb1b4793dbc9d6867` | `dbdca93` | #137 (Abed): prima di ritentare la conferma il CUP cerca nella storia la ricevuta della struttura e la manda al cittadino; se dopo la ricevuta c'è un annullamento della prenotazione cerca un'alternativa. 34/34 file di test verdi su `main` con la #137. Scale tenuto dal deploy (1-1 c32). Conformance PASS. |
+| 21/11 13:30 | booking_centre | 1.0.29 | deploy (Ismail/Opus) | `dep-97f5eaf7865f44e9b2b6696549c95932` | `f3f6cf9` | #147: ricetta, agenda e `world` letti nella storia fino a 420 s (ogni 2 s, poi 5 s), un 429 non chiude l'attesa. Export 13:17 UTC: 44 falliti su 84 (12:08-13:13) con la need.request del cittadino senza risposta, il CUP leggeva 24 volte e poi dipendeva dal push. 35/35 file di test verdi. Scale tenuto (1-1 c32). Conformance PASS. |
 Commit: per le righe fino alle 07:29 è il commit del bump della card (il codice rilasciato è quello del suo genitore su `main`); dalle prossime, lo SHA di `main` rilasciato. Le righe con «—» sono ricostruite dai commit: chi ha fatto quei deploy può completare il deployment.

@@ -46,6 +46,7 @@ def load_brain():
     sys.modules[spec.name] = brain
     spec.loader.exec_module(brain)
     brain._PULL_PAUSE = 0
+    brain._WAIT_SECONDS = 0.0  # no patient wait on the fake Ledger
     return brain
 
 
