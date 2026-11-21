@@ -1,5 +1,17 @@
 # Journal (la voce più recente in alto)
 
+## 2026-11-21 12:08 — Abed — CUP: partner incompatibili e scadenza delle alternative
+
+**Fatto**
+- Integrato il lavoro della #86. Un partner che l'Index segnala come incompatibile per ruolo o servizio resta escluso anche se il CUP lo conosce già o lo trova nel ring.
+- Dopo un rifiuto per scadenza, la ricerca delle alternative locali usa il termine della pratica. Il test parte dal testo del caso 3130005 e simula agenda e disponibilità.
+
+**Problemi**
+- Il controllo dell'Index usa i metadati esposti dall'SDK. Il risultato in gara va verificato sulle nuove ricerche e sulle ricevute.
+
+**Prossimo passo**
+- Review della PR, poi rilascio coordinato. Seguire i casi cross-ASST e quelli con rifiuto per scadenza.
+
 ## 2026-11-21 12:05 — Alberto (Hhapca, con Claude) — Consultorio 1.0.12 verificato in sola lettura; correzione del ramo `past` pronta
 
 **Fatto**

@@ -1,6 +1,11 @@
 
 # Problemi
 
+## CUP: ricerche ai partner e alternative dopo un rifiuto per scadenza (21/11)
+
+- La #86 filtrava i nuovi risultati dell'Index. Il test dimostra che la lista del ring e i partner appresi potevano riportare nella ricerca una struttura con un ruolo o un servizio incompatibile. Il CUP applica la stessa esclusione alla lista finale.
+- Il caso 3130005 mostra tre rifiuti per scadenza. Con una pagina di slot simulata, il CUP poteva poi offrire una data già oltre il termine della pratica, perché la ricerca locale di alternative ricalcolava la finestra dal momento della risposta. Ora il primo tentativo di alternativa usa il termine della pratica.
+
 ## Verifica della 1.0.12 in sola lettura (21/11, messaggi fino alle 10:56 UTC)
 
 - **Tre `held` su tre dopo le 10:24 UTC finiscono in `STALE_FENCE` con il commit partito entro 2 s** (orari `sent_at`, UTC; il Ledger risponde `refused commit code=STALE_FENCE detail=the fence expired`):
