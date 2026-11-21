@@ -14,7 +14,7 @@ import os
 import re
 from collections import OrderedDict
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from city_sdk.city import LEDGER, CapError, City, Message, Need, OutOfScope, clinical, understood
@@ -326,7 +326,8 @@ def fitting(
         slot = fields_of(line)
         slot_id = slot.get("slot_id")
         doctor = slot.get("doctor_id")
-        at = _when(slot.get("at", ""))
+        # Real Ledger lines carry agenda_date / agenda_day; the local stand-in uses at / day.
+        at = _when(slot.get("at", "") or slot.get("agenda_date", ""))
         if not slot_id or not doctor or at is None:
             continue
         if procedure and slot.get("procedure") not in (None, procedure):
@@ -347,7 +348,7 @@ def fitting(
         if spec is not None:
             if not _speaks(doctor, lang):
                 continue
-            day = slot.get("day", "")
+            day = slot.get("day") or slot.get("agenda_day", "")
             if day and day not in spec[2]:
                 continue
             if gender and spec[1] != gender:
@@ -446,6 +447,7 @@ def _gender(chat: list[Message]) -> str | None:
 
 
 def _offer_line(slot: dict[str, str], number: str | None, priority: str | None) -> str:
+    at = slot.get("at") or slot.get("agenda_date", "")
     parts = [
         "offer",
         f"offer_id=of-{slot['slot_id']}",
@@ -453,9 +455,9 @@ def _offer_line(slot: dict[str, str], number: str | None, priority: str | None) 
         f"doctor_id={slot['doctor_id']}",
         f"facility={slot['facility']}",
         f"procedure={slot['procedure']}",
-        f"agenda_date={slot['at']}",
-        f"agenda_day={slot['day']}",
-        f"expiry={slot['at']}",
+        f"agenda_date={at}",
+        f"agenda_day={slot.get('day') or slot.get('agenda_day', '')}",
+        f"expiry={at}",
     ]
     if priority:
         parts.append(f"priority={priority}")
@@ -1332,6 +1334,9 @@ _DAYS = {
     "sab": "sat", "dom": "sun",
 }
 _WEEKDAY = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+# after/before are Milan wall-clock time, the Ledger's agenda_date is UTC. The event runs in
+# November (CET, UTC+1); a fixed offset avoids depending on tzdata in the image.
+_MILANO = timezone(timedelta(hours=1))
 
 
 def _clock(value: str) -> tuple[int, int] | None:
@@ -1380,6 +1385,7 @@ def _violations(slot: dict[str, str], criteria: dict) -> list[str]:
         broken.append("gender_preference")
     at = _when(slot.get("agenda_date", "") or slot.get("at", ""))
     if at is not None:
+        at = at.astimezone(_MILANO)
         day = (slot.get("agenda_day") or slot.get("day") or _WEEKDAY[at.weekday()]).lower()[:3]
         if criteria["days"] and day not in criteria["days"]:
             broken.append("days")
