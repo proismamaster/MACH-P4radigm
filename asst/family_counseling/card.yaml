@@ -1,7 +1,7 @@
 agent_id: agent:nkh372rd16yq
 team: team:p4radigm
 name: family_counseling
-version: 1.0.7
+version: 1.0.8
 cap_versions:
   - "1.0"
 profiles:
