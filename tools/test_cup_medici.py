@@ -107,5 +107,20 @@ check("prima il partner con l'h3 che parla la lingua (ur -> Nord)", got[0] == "a
 got = cup._cup_partner_candidates(["agent:altro1", "agent:h6r1v45esk77"], "specialist_care.cardiology", {"agent:hnpe58epeyh1"}, "it")
 check("niente doppioni, mai le strutture locali, poi i risultati di find", got[5:] == ["agent:altro1", "agent:h6r1v45esk77"] and "agent:hnpe58epeyh1" not in got and len(got) == len(set(got)))
 
+print("CUP - MACH-1.1: date senza fuso, rifiuto del cittadino")
+naive = (f"offer offer_id=po-9 slot_id=S-6 doctor_id=asst-greco-h1 facility={PARTNER} procedure=VIS-FIS "
+         f"agenda_date=2026-11-24T09:00:00 doctor_lang=it/en doctor_gender=f request_id=rq-1")
+slots, _ = cup._cup_partner_slots(partner_chat(naive), {PARTNER: "rq-1"}, "VIS-FIS", "B", NOW, CIT, set())
+check("tiene l'offerta con agenda_date senza fuso (UTC)", len(slots) == 1)
+CUP_ID = "agent:noi/cup"
+offer_msg = Message(type="chat", sender=CUP_ID, recipient=CIT, msg_id="o1", need_id="N-1",
+                    body={"text": "offer offer_id=of-a-1 slot_id=S-1 doctor_id=h1 facility=agent:p/h procedure=VIS-FIS agenda_date=" + AT + "\n"
+                                  "offer offer_id=of-a-2 slot_id=S-2 doctor_id=h1 facility=agent:p/h procedure=VIS-FIS agenda_date=" + AT})
+dec = [Message(type="chat", sender=CIT, recipient=CUP_ID, msg_id=f"c{i}", need_id="N-1",
+               body={"text": f"Non posso venire. cancel offer_id=of-a-{i} reason=deadline"}) for i in (1, 2)]
+check("offerte aperte prima del rifiuto", len(cup._cup_case([offer_msg], CUP_ID, CIT).offers) == 2)
+check("rifiuto di una: ne resta una", list(cup._cup_case([offer_msg, dec[0]], CUP_ID, CIT).offers) == ["of-a-2"])
+check("rifiuto di tutte: nessuna offerta aperta (il CUP riparte)", cup._cup_case([offer_msg, *dec], CUP_ID, CIT).offers == {})
+
 print("FALLITE:", FAILS if FAILS else "nessuna")
 sys.exit(1 if FAILS else 0)
