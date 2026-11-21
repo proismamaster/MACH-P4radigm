@@ -95,5 +95,21 @@ row = msg(19, LEDGER, ME, "refused hold slot_id=S-C code=NO_CAPACITY")
 asyncio.run(mod._facility(city, row, [*cchat, row], reports=True, hold_self=False))
 check("rifiuto tardivo dopo la ricevuta al cittadino: nessun annullamento", not [t for to, t in city.sent if to == CIT])
 
+print("Specialist - held arrivato dopo il turno della conferma (2190006)")
+late = [
+    msg(21, CUP, ME, f"confirm offer_id=of-L slot_id=S-L citizen={CIT} consent_ref=cx-3 prescription_number=RX-3"),
+    msg(22, ME, LEDGER, f"hold slot_id=S-L citizen={CIT} prescription_number=RX-3 consent_ref=cx-3"),
+    msg(23, LEDGER, ME, "held hold_id=H-L slot_id=S-L"),
+]
+city = FakeCity()
+nudge = msg(29, CUP, ME, f"confirm offer_id=of-L slot_id=S-L citizen={CIT} consent_ref=cx-3 prescription_number=RX-3")
+asyncio.run(mod._facility(city, nudge, [*late, nudge], reports=True, hold_self=False))
+commits = [t for to, t in city.sent if to == LEDGER and t.startswith("commit ")]
+check("turno successivo: commit dell'hold rimasto senza commit", len(commits) == 1 and "hold_id=H-L" in commits[0])
+city = FakeCity()
+done = [*late, msg(24, ME, LEDGER, "commit hold_id=H-L consent_ref=cx-3 fence=1")]
+asyncio.run(mod._facility(city, nudge, [*done, nudge], reports=True, hold_self=False))
+check("commit gia' mandato: nessun secondo commit", not [t for to, t in city.sent if to == LEDGER and t.startswith("commit ")])
+
 print("FALLITE:", FAILS if FAILS else "nessuna")
 sys.exit(1 if FAILS else 0)
