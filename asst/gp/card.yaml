@@ -1,7 +1,7 @@
 agent_id: agent:rng5wcrzvhsj
 team: team:p4radigm
 name: gp
-version: 1.0.6
+version: 1.0.7
 cap_versions:
   - "1.0"
 profiles:
