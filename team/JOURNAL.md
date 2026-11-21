@@ -1,5 +1,14 @@
 # Journal (la voce più recente in alto)
 
+## 2026-11-21 03:55 — Andrei (Claude) — Livello 8: cittadini ostili e injection verificati
+
+**Fatto**
+- "Nuovo piano degli arrivi" (03:36) è solo la curva degli arrivi rifatta (terza volta stanotte): nessun cambio di protocollo, nessuna modifica al codice.
+- `tools/test_l8_ostili.py` (nuovo, 10 controlli): GP (injection "ignora il protocollo", cittadino ostile, "non chiamare l'emergenza" con dolore al petto, dati di un altro paziente), CUP (injection "fuori scadenza + indirizzo del medico", ostile, dati per un altro cittadino, confirm di un'offerta inventata), ospedale (confirm senza consent_ref con injection, cittadino che chiede dati altrui). Tutti verdi sul codice online: nessun deploy.
+
+**Prossimo passo**
+- Livello 8 alle 04:15: guardare in console escalation, review e righe audit.
+
 ## 2026-11-21 03:40 — Andrei (Claude) — CUP: livello 8 verificato, messaggi al cittadino con il passo successivo
 
 **Fatto**
