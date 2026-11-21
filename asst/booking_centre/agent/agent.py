@@ -387,6 +387,16 @@ async def _load_case_history(city: City, need_id: str) -> list[Message] | None:
     return None
 
 
+# Export 13:17 UTC: 44 of 84 failed journeys (12:08-13:13) had the citizen's need.request unanswered. The
+# Ledger answered the prescription lookup, agenda and world after minutes (GP: world 7-9 minutes late) and
+# the push that opens the next turn came 60-90 s later or never. A patient wait reads the case history until
+# the reply lands, as the GP, the specialist, the hospital and the consultorio do; reads are spaced out (2 s,
+# then 5 s) and a 429 does not end it, because the city rate-limits our calls.
+_WAIT_SECONDS = 420.0
+_WAIT_STEP = 2.0
+_WAIT_STEP_LATE = 5.0
+
+
 async def _until(
     city: City,
     need_id: str | None,
@@ -394,29 +404,39 @@ async def _until(
     ready: Callable[[list[Message]], bool],
     *,
     max_polls: int | None = None,
+    patient: bool = False,
 ) -> list[Message] | None:
-    """Re-read the case until ``ready`` or the short wait ends. The push may never arrive."""
+    """Re-read the case until ``ready`` or the wait ends. The push may never arrive."""
 
     if not need_id:
         return None
     fresh = chat
-    previous_failed = False
+    failures = 0
     polls = _PULL_TRIES if max_polls is None else min(max_polls, _PULL_TRIES)
-    for attempt in range(polls):
+    started, attempt = monotonic(), 0
+    while True:
         try:
             fresh = await city.history(need_id=need_id)
         except CapError as error:
-            if previous_failed or not _history_can_retry(error):
+            failures += 1
+            retry = _history_can_retry(error) or (patient and error.code == "RATE_LIMITED")
+            if not retry or failures >= (3 if patient else 2):
                 _LOG.warning("cup.history.failed need=%s code=%s", need_id, error.code)
                 return None
-            previous_failed = True
         else:
-            previous_failed = False
+            failures = 0
             if ready(fresh):
                 return fresh
-        if attempt + 1 < polls:
+        attempt += 1
+        if patient:
+            elapsed = monotonic() - started
+            if elapsed >= _WAIT_SECONDS:
+                return fresh
+            await asyncio.sleep(_WAIT_STEP if elapsed < 30 else _WAIT_STEP_LATE)
+        else:
+            if attempt >= polls:
+                return fresh
             await asyncio.sleep(_PULL_PAUSE)
-    return fresh
 
 
 _AGENDA_RATE = 60  # agenda minutes per real minute (/v1/team/wave "rate")
@@ -1879,6 +1899,7 @@ async def _advance_alone(
                 message.need_id,
                 chat,
                 lambda rows: _cup_prescription(rows, number, citizen) is not None,
+                patient=True,
             )
             if rows is None:
                 return
@@ -1902,6 +1923,7 @@ async def _advance_alone(
             message.need_id,
             chat,
             lambda rows: _has_agenda(fresh(rows)) and _latest_slots(fresh(rows)) is not None,
+            patient=True,
         )
         if rows is None:
             return
