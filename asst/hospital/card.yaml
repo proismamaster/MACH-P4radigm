@@ -1,7 +1,7 @@
 agent_id: agent:bb01ggxymm05
 team: team:p4radigm
 name: hospital
-version: 1.0.4
+version: 1.0.5
 cap_versions:
   - "1.0"
 profiles:
