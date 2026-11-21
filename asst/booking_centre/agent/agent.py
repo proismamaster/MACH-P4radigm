@@ -16,7 +16,7 @@ from collections import OrderedDict, deque
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from secrets import token_hex
 from time import monotonic
@@ -255,7 +255,8 @@ def _when(value: str) -> datetime | None:
     except ValueError:
         return None
     if parsed.tzinfo is None:
-        return None
+        # MACH-1.1 partners write ISO dates without an offset; the Ledger and the world use UTC.
+        return parsed.replace(tzinfo=timezone.utc)
     return parsed
 
 
@@ -653,6 +654,11 @@ class _CupCase:
 def _cup_case(chat: list[Message], agent: str, citizen: str) -> _CupCase:
     state = _CupCase()
     for row in chat:
+        if row.sender == citizen and "cancel" in words(row.text):
+            # The citizen declines an offer (e.g. reason=deadline): it is no longer open, so once
+            # every offer is declined the case moves on instead of waiting in silence (165, 166).
+            state.offers.pop(fields_of(row.text).get("offer_id", ""), None)
+            continue
         if row.sender != agent:
             continue
         act = first_word(row.text)
