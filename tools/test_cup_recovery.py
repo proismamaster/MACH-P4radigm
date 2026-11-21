@@ -52,6 +52,7 @@ class Case:
         self.need_id = f"N-2026-11-23-{key}"
         self.ids = count()
         self.history_rows = []
+        self.hidden_from_history = set()
         self.sent = []
 
     def add(self, sender, text, recipient=CUP, *, conversation="citizen"):
@@ -85,7 +86,8 @@ class Case:
         return [
             row
             for row in self.history_rows
-            if (need_id is None or row.need_id == need_id)
+            if row.msg_id not in self.hidden_from_history
+            and (need_id is None or row.need_id == need_id)
             and (peer is None or peer in (row.sender, row.recipient))
         ]
 
@@ -136,7 +138,7 @@ class Case:
         await self.turn(self.add(CITIZEN, f"confirm offer_id={offer_id} consent_ref=cons-42-booking"))
         return offer_id
 
-    async def reach_remote_consent(self, *, second_partner_slot=False):
+    async def receive_remote_offer(self, *, second_partner_slot=False):
         await self.open(local_free=0)
         (request,) = self.out(PARTNER, "need.request")
         request_id = understood(request).body["request_id"]
@@ -153,6 +155,10 @@ class Case:
                 f"expiry={LATER_APPOINTMENT} request_id={request_id} priority=B"
             )
         await self.turn(self.add(PARTNER, options, conversation="partner"))
+        return request_id
+
+    async def reach_remote_consent(self, *, second_partner_slot=False):
+        request_id = await self.receive_remote_offer(second_partner_slot=second_partner_slot)
         offer_id = await self.accept_offer()
         (prompt,) = self.out(CITIZEN, "consent")
         assert understood(prompt).body["purpose"] == "cross_asst"
@@ -252,6 +258,44 @@ class CupRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(confirmations), 1, "The consent act need not be the first word")
         self.assertEqual(understood(confirmations[0]).body["consent_ref"], CROSS_REF)
         self.assertEqual(case.out(CITIZEN, "cancel"), [])
+
+    async def test_cross_asst_declined_offer_does_not_accept_late_confirmation(self):
+        for hidden in (False, True):
+            with self.subTest(offer_missing_from_relay_history=hidden):
+                case = Case(self.brain, f"declined-offer-{hidden}")
+                await case.receive_remote_offer()
+                offer_id = case.choices()[0]["offer_id"]
+                if hidden:
+                    case.hidden_from_history.add(case.out(CITIZEN, "offer")[-1].msg_id)
+                await case.turn(case.add(CITIZEN, f"Non posso venire. cancel offer_id={offer_id} reason=deadline"))
+                await case.turn(case.add(CITIZEN, f"confirm offer_id={offer_id} consent_ref=cons-42-booking"))
+                self.assertEqual(case.out(CITIZEN, "consent"), [], "A declined offer cannot start a new consent flow")
+                self.assertEqual(case.out(PARTNER, "confirm"), [])
+
+    async def test_cross_asst_history_keeps_send_order_when_one_search_is_missing(self):
+        case = Case(self.brain, "partial-relay-history")
+        await case.receive_remote_offer()
+        (search,) = case.out(PARTNER, "need.request")
+        case.hidden_from_history.add(search.msg_id)
+
+        relay_rows = await case.history(peer=None, need_id=case.need_id)
+        merged = self.brain._cup_history(relay_rows, self.brain._sent(case.need_id), CUP, case.need_id)
+        self.assertEqual([row.msg_id for row in merged], [row.msg_id for row in case.history_rows])
+
+    async def test_cross_asst_last_decline_reopens_search_for_alternative(self):
+        case = Case(self.brain, "last-offer-declined")
+        request_id = await case.receive_remote_offer()
+        offer_id = case.choices()[0]["offer_id"]
+        await case.turn(case.add(CITIZEN, f"Non posso venire. cancel offer_id={offer_id} reason=deadline"))
+
+        await case.turn(case.add(
+            PARTNER,
+            f"offer offer_id=of-{LATER_PARTNER_SLOT} slot_id={LATER_PARTNER_SLOT} doctor_id=doctor-h1 "
+            f"facility={PARTNER} procedure={PROCEDURE} agenda_date={LATER_APPOINTMENT} request_id={request_id}",
+            conversation="partner",
+        ))
+        self.assertEqual(len(case.out(CITIZEN, "offer")), 2, "After the last decline, offer a valid alternative")
+        self.assertEqual([offer["slot_id"] for offer in case.choices()], [LATER_PARTNER_SLOT])
 
     async def test_cross_asst_withdrawal_while_awaiting_consent_blocks_confirm(self):
         case = Case(self.brain, "withdrawal")

@@ -27,7 +27,7 @@ Tutte vere: ogni primo messaggio dice "dolore al petto forte da stamattina", il 
 
 ### Prenotazione riuscita e annullata (069, 099)
 
-Il Ledger conferma il `commit` ma il cittadino riceve `cancel ... facility_cancelled`. Il CUP traduce ogni `cancel` della struttura in `facility_cancelled` (`booking_centre/agent/agent.py:759-767`) e perde il codice reale. Ipotesi forte, da provare con un test: l'ospedale manda due `commit` per lo stesso hold (il turno di `_finish_booking` e il turno del messaggio `held` del Ledger si accavallano, `_our_commit` guarda una storia non ancora aggiornata); il secondo `commit` viene rifiutato, `_on_refused` (`hospital/agent/agent.py:1155`) manda `cancel` al CUP e il CUP lo gira al cittadino. Conseguenze: prenotazione fantasma sul Ledger, nuove offerte, hold mai rilasciati. Da fare: test con Ledger finto che risponde `held` due volte; in `_on_refused` non annullare se per quell'hold c'è già un `committed` nella storia. File dell'ospedale: Alberto.
+Nei percorsi 069 e 099 il Ledger conferma il `commit` e il cittadino riceve anche `cancel ... facility_cancelled`. In una prova locale con il City SDK e il Ledger simulato, i turni concorrenti di `_finish_booking` e `held` hanno mandato due `commit` per lo stesso hold. Il primo viene accettato, il secondo risponde `DUPLICATE`. L'ospedale invia al CUP sia la ricevuta sia l'annullamento. La causa dei due casi in Arena resta da confermare. Alberto verifica la correlazione per hold e corregge il doppio commit e l'annullamento dopo `committed`.
 
 ### no_slots falso
 
