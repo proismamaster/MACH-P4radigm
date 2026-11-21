@@ -1433,6 +1433,16 @@ async def _advance_alone(
     if missing_page is not None:
         if not _asked(catalogue_chat, agent, procedure, missing_page):
             await _cup_send(city, message, sent, LEDGER, f"world procedure={procedure} page={missing_page}")
+        # A Ledger reply does not open a turn: wait for the page here and go on in this turn,
+        # otherwise the case stalls until another message arrives (3-5 real minutes, 197, 1220004).
+        def pages_read(rows: list[Message]) -> int:
+            return sum(1 for row in rows if row.sender == LEDGER and first_word(row.text) == "slots")
+        before = pages_read(chat)
+        fresh_rows = await _until(city, message.need_id, chat, lambda rows: pages_read(rows) > before)
+        if pages_read(fresh_rows) > before:
+            await _advance_alone(
+                city, message, _cup_history(fresh_rows, sent, agent, key), key, replacing=replacing,
+            )
         return
     if number and procedure in _CUP_SERVICES and priority in {"U", "B", "D"}:
         relaxed = _cup_relaxed(
