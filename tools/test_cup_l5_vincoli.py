@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
-from city_sdk.city import LEDGER, City, Message, Need
+from city_sdk.city import LEDGER, City, Message, Need, Peer
 
 path = Path(__file__).resolve().parents[1] / "asst/booking_centre/agent/agent.py"
 spec = importlib.util.spec_from_file_location("cup_l5", path)
@@ -63,13 +63,62 @@ class Mailbox:
 
     async def offer(self, criteria):
         inbound = self.add(CITIZEN, f"need.request prescription_number={RX} {criteria}")
-        city = City(index=self, history=self, messages=self, agent_id=AGENT, inbound=inbound)
-        with patch.dict(os.environ, {"CITY_ROLE": "booking_centre"}), patch.object(cup, "_CUP_RING", ()):
-            await cup.main(Need(message=inbound), city)
+        await self.turn(inbound)
         return [option for row in self.sent if row.recipient == CITIZEN for option in cup._offer_blocks(row.text)]
+
+    async def turn(self, inbound):
+        city = City(index=self, history=self, messages=self, agent_id=AGENT, inbound=inbound)
+        with patch.dict(os.environ, {"CITY_ROLE": "booking_centre"}), patch.object(cup, "_CUP_RING", ()), patch.object(cup, "_PULL_PAUSE", 0):
+            await cup.main(Need(message=inbound), city)
 
 
 class CupLevelFiveTests(unittest.IsolatedAsyncioTestCase):
+    async def test_same_need_retry_after_no_slots_rechecks_partners_in_formal_language(self):
+        # Arena 1410008 and 2630005: English prose, but different formal doctor languages.
+        requests = (
+            ("1410008", "hi", "fr, lowkey my back is killing me, can i get a doc who speaks english?"),
+            ("2630005", "ka", "Excuse me, I have a referral for back pain and was hoping to schedule an "
+                              "appointment with a doctor who speaks English, if possible."),
+        )
+        for need, language, prose in requests:
+            with self.subTest(need=need, language=language):
+                mailbox = Mailbox(need, "B", [slot("english", "h1", "24T10:00", "tue")])
+                text = (f"{prose} need.request area={{'district':_4}} lang={language} "
+                        f"prescription_number={RX} service_type=hospital.physiatry")
+                original = mailbox.add(CITIZEN, text)
+                mailbox.add(AGENT, f"need.request service_type=hospital.physiatry procedure=VIS-FIS priority=B "
+                                   f"request_id=rq-old lang={language}", PARTNER)
+                mailbox.add(PARTNER, "cancel reason=no_availability request_id=rq-old")
+                mailbox.add(AGENT, cup._no_slots_text("", "no_slots"), CITIZEN)
+
+                candidates = [Peer(PARTNER, role="hospital", capabilities=("hospital.physiatry",))]
+                with patch.object(mailbox, "search", return_value=candidates) as find:
+                    await mailbox.turn(original)
+                    find.assert_not_awaited()
+                    await mailbox.turn(mailbox.add(CITIZEN, text))
+                    find.assert_awaited_once()
+                    (search,) = [row for row in mailbox.sent if row.recipient == PARTNER]
+                    fields = cup.fields_of(search.text)
+                    self.assertEqual(fields["lang"], language)
+                    self.assertNotEqual(fields["request_id"], "rq-old")
+                    self.assertNotIn(CITIZEN, search.text)
+                    self.assertNotIn(RX, search.text)
+
+                    # Another replay, even after cache eviction, must not start a third round.
+                    cup._SENT.pop(mailbox.need_id, None)
+                    await mailbox.turn(mailbox.add(CITIZEN, text))
+                    find.assert_awaited_once()
+
+                remote = (f"offer offer_id=of-{{slot}} slot_id={{slot}} doctor_id=foreign-h3 facility={PARTNER} "
+                          "procedure=VIS-FIS agenda_date=2026-11-24T10:00:00Z agenda_day=tue "
+                          "doctor_lang=it/{language} request_id={request}")
+                await mailbox.turn(mailbox.add(PARTNER, remote.format(slot="late", language=language, request="rq-old")))
+                await mailbox.turn(mailbox.add(PARTNER, remote.format(slot="wrong", language="en", request=fields["request_id"])))
+                self.assertFalse([o for row in mailbox.sent if row.recipient == CITIZEN for o in cup._offer_blocks(row.text)])
+                await mailbox.turn(mailbox.add(PARTNER, remote.format(slot="matching", language=language, request=fields["request_id"])))
+                offers = [o for row in mailbox.sent if row.recipient == CITIZEN for o in cup._offer_blocks(row.text)]
+                self.assertEqual([o["slot_id"] for o in offers], ["matching"])
+
     async def test_strict_live_fields_and_combined_preference(self):
         mailbox = Mailbox("strict", "B", [
             slot("fit", "asst-bicocca-h1", "25T10:00", "wed", live=True, extra="capacity=1"),
