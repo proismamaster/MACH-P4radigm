@@ -1,5 +1,19 @@
 # Journal (la voce più recente in alto)
 
+## 2026-11-21 11:10 — Alberto (Hhapca, con Claude) — Consultorio 1.0.10 online (NO_CAPACITY, STALE_FENCE, attesa del Ledger)
+
+**Fatto**
+- Il ramo `hapca/consultorio-ledger-lento` è in `main` (`c9d1b28`, avanzamento semplice) e il consultorio è **online alla 1.0.10 dalle 10:06 UTC** (`dep-1db21a807504496bb2027b563b9ceab3`, conformance PASS in 43,6 s). Card a 1.0.11 e riga nel registro dei rilasci in `main` (`2887797`). Rollback pronto: `city rollback agent:nkh372rd16yq --to 1.0.9`.
+- Contenuto: vedi la voce delle 11:05 qui sotto e `team/PROBLEMS.md` (casi 2560005 e 3290003, tempi per fase).
+
+**Problemi**
+- Il primo deploy (10:03 UTC) è fallito in conformance, stadio `health`, dettaglio `p99` (60 s): il candidato non è stato promosso, online è rimasta la 1.0.9. Stesso esito di specialist 1.0.5 alle 09:30 (Ismail lo ha attribuito all'attesa di 20 s nel turno del check-in) e del consultorio 1.0.0 in nottata, quando non c'erano attese lunghe. Riprovato dopo 3 minuti con lo stesso codice, che ha le attese di 180 s: PASS. Quindi le attese non fanno fallire la conformance di per sé; la causa resta incerta (lo stadio `health` viene prima di ogni prova sul brain: 5 richieste di riscaldamento e 20 misurate, tutte sotto 0,3 s). Se capita ancora: riprovare dopo 75 s prima di cambiare il codice.
+- Non ancora verificato in Arena: i percorsi iniziati prima delle 10:08 UTC sono della 1.0.9.
+
+**Prossimo passo**
+- Dopo le 10:10 UTC rilanciare `await misura('agent:nkh372rd16yq')` (`tools/misura_latenze.js`) e leggere sui percorsi nuovi: `held` → commit sotto i 10 s, `committed` contro `commit STALE_FENCE`, `hold NO_CAPACITY` e `hold EXPIRED`, prima offerta.
+- Se la 1.0.10 peggiora qualcosa di nuovo nei primi percorsi: rollback alla 1.0.9 e riga `rollback` nel registro.
+
 ## 2026-11-21 11:05 — Alberto (Hhapca, con Claude) — Consultorio: NO_CAPACITY, STALE_FENCE e tempi di hold e commit
 
 **Fatto** (branch `hapca/consultorio-ledger-lento`, 3 commit sopra `main`; NON pubblicato, online resta la 1.0.9)
