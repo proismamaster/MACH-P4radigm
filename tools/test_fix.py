@@ -57,18 +57,22 @@ CIT = "citizen:t01/c-0042"
 
 
 async def specialist(answer, want_ref):
+    # Since 21/11 09:40 the report is archived at the end of the check-in turn when no answer comes
+    # within the short wait (report_missing -1, journey 1820005). Here the answer arrives in a LATER
+    # turn, so the report is the unshared one and the late answer adds nothing. The answer inside
+    # the wait (shared report) is covered by tools/test_specialist_referto.py.
     h = harness("specialist_care.cardiology", SPEC)
+    h.mod._CONSENT_WAIT = 0.2
     await h.turn(CIT, "checkin booking_id=BK-1")
     asks = h.out(CIT, "consent")
     check("chiede consenso report_sharing dopo il check-in", len(asks) == 1 and "purpose=report_sharing" in asks[0], h)
-    check("nessun referto prima della risposta", not h.out("city:ledger", "report"), h)
-    await h.turn(CIT, answer)
     reports = h.out("city:ledger", "report")
-    ok = len(reports) == 1 and (("consent_ref=" + want_ref) in reports[0] if want_ref else "consent_ref" not in reports[0])
-    check(f"referto al Ledger {'con consent_ref' if want_ref else 'senza condivisione'}", ok, h)
+    check("senza risposta nel turno del check-in: referto archiviato senza condivisione",
+          len(reports) == 1 and "consent_ref" not in reports[0], h)
     check("referto comunicato al cittadino", len(h.out(CIT, "report")) == 1, h)
     await h.turn(CIT, answer)
-    check("nessun secondo referto se il cittadino ripete", len(h.out("city:ledger", "report")) == 1, h)
+    await h.turn(CIT, answer)
+    check("risposta tardiva (anche ripetuta): nessun secondo referto", len(h.out("city:ledger", "report")) == 1, h)
 
 
 GP = "agent:t02/gp"
@@ -92,12 +96,13 @@ async def main():
     await specialist("No grazie, preferisco di no.", None)
     print("Specialist - consenso per altro scopo ignorato")
     h = harness("specialist_care.cardiology", SPEC)
+    h.mod._CONSENT_WAIT = 0.2
     await h.turn(CIT, "checkin booking_id=BK-1")
     await h.turn(CIT, "ok consent consent_ref=cons-9-booking purpose=booking")
-    check("consent_ref di prenotazione non usato per il referto", not h.out("city:ledger", "report"), h)
-    await h.turn(CIT, "Va bene. consent consent_ref=cons-77 purpose=report_sharing")
     reports = h.out("city:ledger", "report")
-    check("poi il consenso giusto archivia con cons-77", len(reports) == 1 and "consent_ref=cons-77" in reports[0], h)
+    check("consent_ref di prenotazione mai usato per il referto",
+          len(reports) == 1 and "cons-9-booking" not in reports[0], h)
+    check("il consenso per un altro scopo non è una risposta", not h.mod._consent_reply(h.port.log[-1])[0], h)
     print("GP - testo libero vero dalla console")
     await gp("Ciao! Ho mal di schiena da un po' di settimane, vorrei fare vedere.", "VIS-FIS")
     await gp("ciao doc, raga tipo il cuore che batte a mille ultimamente, lowkey vorrei un check", "VIS-CARD")

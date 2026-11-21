@@ -1519,6 +1519,39 @@ def _cup_relaxed(
     )
 
 
+def _cup_doctor_gender(slot: dict[str, str]) -> str | None:
+    spec = _doctor_spec(slot.get("doctor_id", ""))
+    if spec is not None:
+        return spec[1]
+    stated = slot.get("doctor_gender", "").lower()
+    return stated if stated in {"m", "f"} else None
+
+
+def _cup_varied(slots: list[dict[str, str]], count: int = 3) -> list[dict[str, str]]:
+    """The offers for one message: the first slot as ranked, then the ones that add a doctor gender
+    or a weekday not offered yet. The citizen has hidden gender and day preferences and answers once
+    (console 21/11: all three offers refused with reason=gender or reason=day; on Thursday and
+    Friday physiatry has only male doctors, so "one slot per day" gave three male offers).
+    A new gender counts more than a new day; ties keep the original order."""
+
+    if len(slots) <= count:
+        return list(slots)
+    picked = [slots[0]]
+    rest = list(slots[1:])
+    while len(picked) < count and rest:
+        days = {slot.get("day") for slot in picked}
+        genders = {_cup_doctor_gender(slot) for slot in picked}
+
+        def gain(index: int) -> tuple[int, int]:
+            slot = rest[index]
+            gender = _cup_doctor_gender(slot)
+            new_gender = gender is not None and gender not in genders
+            return (3 * new_gender + 2 * (slot.get("day") not in days), -index)
+
+        picked.append(rest.pop(max(range(len(rest)), key=gain)))
+    return picked
+
+
 async def _cup_offer_batch(
     city: City, message: Message, cache: _Sent, citizen: str,
     slots: list[dict[str, str]], number: str | None, priority: str | None, *, replacing: bool,
@@ -1532,11 +1565,7 @@ async def _cup_offer_batch(
         instruction = f"{note} {instruction}"
     options = []
     delivered = set()
-    # One slot per weekday first: three offers on three days beat three on a single day the citizen
-    # may not have (reason=day refusals, console 21/11).
-    seen = set()
-    first = [slot for slot in slots if not (slot.get("day") in seen or seen.add(slot.get("day")))]
-    for index, slot in enumerate([*first, *(slot for slot in slots if slot not in first)][:3], 1):
+    for index, slot in enumerate(_cup_varied(slots), 1):
         line = _offer_line(slot, number, priority, offer_id=f"of-{batch}-{index}")
         if note:
             line += " relaxed=true"

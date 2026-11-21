@@ -706,19 +706,70 @@ async def _on_checked_in(
         await _say(city, citizen, f"checkin booking_id={booking_id}" + (f" ledger_ref={ledger_ref}" if ledger_ref else ""))
     if not reports:
         return
-    # Rule: ask report_sharing consent first; the report goes to the Ledger when the citizen answers.
+    # Ask report_sharing consent, wait a short while for the answer, then archive the report in any
+    # case: shared with a report_sharing consent_ref, otherwise not shared. Waiting for an answer that
+    # never comes left the report unfiled (report_missing -1, journey 1820005: the citizen does not
+    # answer after the check-in). The kit: without the requested field, archive the report unshared.
     if citizen and not _we(chat, city.agent_id, "purpose=report_sharing", to=citizen, word="consent"):
         await _say(
             city, citizen,
             f"consent purpose=report_sharing {token} La visita è registrata. "
-            "Posso condividere il referto con il suo medico di base? Se preferisce di no, "
+            "Posso condividere il referto con il suo medico di base? Se non mi risponde subito, "
             "lo archivio senza condividerlo.",
         )
+    if not citizen:
+        return
+    fresh = chat
+    deadline = asyncio.get_running_loop().time() + _CONSENT_WAIT
+    while True:
+        answered, consent_ref = _consent_answer(fresh, city.agent_id, citizen)
+        if answered or asyncio.get_running_loop().time() >= deadline:
+            break
+        await asyncio.sleep(_PULL_PAUSE)
+        try:
+            fresh = await city.history(need_id=message.need_id)
+        except CapError:
+            pass
+    await _file_report(city, message, fresh, booking_id, consent_ref)
 
 
 _CONSENT_ASK = "purpose=report_sharing"
+# How long the check-in turn waits for the answer to the consent question before archiving.
+_CONSENT_WAIT = 20.0
 # Bookings whose report this process already sent to the Ledger (parallel-turn guard).
 _REPORT_SENT: set[str] = set()
+
+
+def _consent_reply(message: Message) -> tuple[bool, str]:
+    """(is an answer to our report_sharing question, consent_ref). A consent for another purpose
+    (booking, cross_asst...) is not an answer; plain words without consent_ref are a refusal."""
+
+    body = understood(message).body
+    fields = fields_of(message.text)
+    consent_ref = fields.get("consent_ref") or body.get("consent_ref")
+    purpose = fields.get("purpose") or body.get("purpose")
+    if not isinstance(consent_ref, str):
+        consent_ref = ""
+    if consent_ref and purpose != "report_sharing" and not consent_ref.endswith("report_sharing"):
+        return False, ""
+    return True, consent_ref
+
+
+def _consent_answer(chat: list[Message], agent: str, citizen: str) -> tuple[bool, str]:
+    """The citizen's answer after our last report_sharing question, if it is in the history."""
+
+    asked = None
+    for index, row in enumerate(chat):
+        if row.sender == agent and first_word(row.text) == "consent" and _CONSENT_ASK in row.text.split():
+            asked = index
+    if asked is None:
+        return False, ""
+    for row in chat[asked + 1:]:
+        if row.sender == citizen:
+            answered, consent_ref = _consent_reply(row)
+            if answered:
+                return True, consent_ref
+    return False, ""
 
 
 def _consent_pending(chat: list[Message], agent: str) -> bool:
@@ -742,24 +793,31 @@ async def _on_report_consent(city: City, message: Message, chat: list[Message]) 
             booking_id = fields_of(row.text).get("booking_id", "")
     if not booking_id:
         return
-    body = understood(message).body
-    fields = fields_of(message.text)
-    consent_ref = fields.get("consent_ref") or body.get("consent_ref")
-    purpose = fields.get("purpose") or body.get("purpose")
-    if not isinstance(consent_ref, str):
-        consent_ref = ""
-    if consent_ref and purpose != "report_sharing" and not consent_ref.endswith("report_sharing"):
-        # A consent for another purpose (booking, cross_asst...) is not an answer to our question.
+    answered, consent_ref = _consent_reply(message)
+    if not answered:
+        return
+    await _file_report(city, message, chat, booking_id, consent_ref)
+
+
+async def _file_report(
+    city: City, message: Message, chat: list[Message], booking_id: str, consent_ref: str
+) -> None:
+    """One report per booking: shared with a report_sharing consent_ref, else archived unshared."""
+
+    if any(
+        row.sender == city.agent_id and row.recipient == LEDGER and first_word(row.text) == "report"
+        and f"booking_id={booking_id}" in row.text.split()
+        for row in chat
+    ):
         return
     command = f"report booking_id={booking_id} outcome_code=VISIT"
     if consent_ref:
         command += f" consent_ref={consent_ref}"
-    # Two answers can open parallel turns before history shows our report: check and mark
-    # in-process with no await in between, so only one turn sends it.
+    # Two turns (the check-in wait and a late answer) can run in parallel before history shows our
+    # report: check and mark in-process with no await in between, so only one sends it.
     if booking_id in _REPORT_SENT:
         return
     _REPORT_SENT.add(booking_id)
-    # No consent_ref in the answer = refusal in plain words: archive the report without sharing.
     if not await _say(city, LEDGER, command):
         _REPORT_SENT.discard(booking_id)
         return

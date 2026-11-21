@@ -1,5 +1,15 @@
 # Journal (la voce più recente in alto)
 
+## 2026-11-21 09:40 — Andrei (Claude) — 24 percorsi falliti della console: cause e correzioni
+
+**Fatto** (percorsi di Andrei dalla console, 21/11 01:36-04:19 UTC)
+- Gia' coperti da Hapca su `main`: data dei partner senza Z (`audit false_attribute -2`, 134/191/293), scadenza B dalla ricetta (rifiuti `deadline`), slot passati (`past`, `slot_expired`), ritardo del Ledger (f72ce63), giorni abbreviati.
+- **Specialist**: archivia il referto anche se il cittadino non risponde al consenso (attesa breve di 20 s, poi referto non condiviso; condiviso solo con un consent_ref `report_sharing`). Era `report_missing -1` (1820005). Test: `tools/test_specialist_referto.py`; aggiornati i casi dello specialist in `tools/test_fix.py` (la risposta tardiva non crea un secondo referto).
+- **CUP**: le tre offerte coprono entrambi i generi di medico e piu' giorni (`_cup_varied`): giovedi' e venerdi' solo uomini in fisiatria, il cittadino ha preferenze nascoste e risponde una volta (12 percorsi su 24 rifiutati con `gender`/`day`). Test: `tools/test_cup_varieta.py`.
+- **Consultorio**: tutte le offerte in UN messaggio (prima una per messaggio; 256 e 1970005 confermati dopo 18-34 minuti, gia' scaduti). Test: prova C di `tools/test_facility.py`.
+- **GP** (2010003, nessuna risposta): su `main` il GP prescrive subito con quel testo; il silenzio era l'attesa del `world` con il Ledger a 7-9 minuti, tolta da f72ce63.
+- Tutti i 23 file di test verdi; card valide.
+
 ## 2026-11-21 08:40 — Alberto (Hhapca, con Claude) — Tutto quello fatto da solo (04:30-08:40)
 
 **Fatto** (in ordine; tutto su `main`, test verdi a ogni passo)
