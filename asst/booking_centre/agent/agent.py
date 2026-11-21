@@ -32,7 +32,15 @@ _PAGING_SECONDS = 60.0
 # hours ahead is already past when it decides (`reason=past`, Ledger `EXPIRED`). Slots at least _LEAD ahead
 # in agenda time come first, then the ones at least _MIN_LEAD ahead; nearer ones are never offered.
 _LEAD = timedelta(hours=30)
-_MIN_LEAD = timedelta(hours=4)
+# Simulation of the 21/11 journeys (tools/sim_percorsi.py): 10 hours is the best minimum (19/21 booked
+# with a 4-minute CUP latency, 14/21 with 4 hours); U keeps 4 (same agenda day).
+_MIN_LEAD = timedelta(hours=10)
+_MIN_LEAD_U = timedelta(hours=4)
+_CONFIRM_MARGIN = timedelta(hours=1)  # at confirm: enough for hold and commit
+
+
+def _min_lead(priority: str | None) -> timedelta:
+    return _MIN_LEAD_U if priority == "U" else _MIN_LEAD
 # Doctor key (the last segment of doctor_id) -> languages, gender, days. ``*`` is the ASST's
 # rare language. The Ledger's slot line names the doctor; it does not repeat this table.
 _OWN_RARE_LANGUAGE = "ti"
@@ -418,7 +426,7 @@ def _ahead(now: datetime, at: datetime) -> timedelta:
 
 def _lead(priority: str | None) -> timedelta:
     """B and U windows are short: the soonest slot past the minimum wins. Elsewhere 30 hours first."""
-    return _MIN_LEAD if priority in ("B", "U") else _LEAD
+    return _min_lead(priority) if priority in ("B", "U") else _LEAD
 
 
 # Console 21/11: the citizen writes to the CUP 19-20 real minutes (agenda hours) after the GP's
@@ -458,7 +466,7 @@ def fitting(
         horizon = _agenda_horizon(now, _DEADLINE_DAYS.get(priority or "", 14))
     if until is not None and horizon is not None and not relax_window:
         horizon = min(horizon, until)
-    earliest = now + _MIN_LEAD
+    earliest = now + _min_lead(priority)
     lead = _lead(priority)
     chosen: list[tuple[datetime, dict[str, str]]] = []
     for line in lines:
@@ -1062,7 +1070,7 @@ async def _cup_confirm(
         return
     # The slot may have come within the minimum lead while the citizen decided: ask again.
     at, now = _when(offer.get("agenda_date", "")), _agenda_now(chat)
-    if at is not None and now is not None and at <= now + _MIN_LEAD:
+    if at is not None and now is not None and at <= now + _CONFIRM_MARGIN:
         await _cup_cancel(
             city, message, chat, cache, citizen,
             f"cancel offer_id={offer_id} reason=slot_expired Questo orario è appena passato.",
@@ -1237,7 +1245,7 @@ def _cup_partner_slots(
         horizon = _agenda_horizon(now, _DEADLINE_DAYS[priority])
     if (until := _true_deadline(chat, citizen, priority)) is not None:
         horizon = min(horizon, until)
-    earliest = now + _MIN_LEAD
+    earliest = now + _min_lead(priority)
     for row in chat:
         request_id = searches.get(row.sender)
         if not request_id:
@@ -1349,7 +1357,7 @@ async def _cup_cross_asst(
         language, gender = _lang(chat, citizen), _gender(chat, citizen)
         # MACH-1.3: the asker sets the window with date and time; a 1.2 facility ignores these tokens.
         until = _true_deadline(chat, citizen, priority)
-        window = f" mach=1.3 earliest={_utc(now + _MIN_LEAD)}" + (f" deadline={_utc(until)}" if until else "")
+        window = f" mach=1.3 earliest={_utc(now + _min_lead(priority))}" + (f" deadline={_utc(until)}" if until else "")
         for partner in _cup_partner_candidates(found, service, local, language):
             request_id = f"rq-{token_hex(8)}"
             search = f"need.request service_type={service} procedure={procedure} priority={priority} request_id={request_id}"

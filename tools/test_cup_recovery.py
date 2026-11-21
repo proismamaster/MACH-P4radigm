@@ -28,8 +28,9 @@ OLD_RX = "prescription_number-OLD123"
 NEW_RX = "prescription_number-NEW456"
 SERVICE = "hospital.physiatry"
 PROCEDURE = "VIS-FIS"
-APPOINTMENT = "2026-11-23T13:00:00+01:00"
-LATER_APPOINTMENT = "2026-11-23T14:00:00+01:00"
+# At least 10 agenda hours after the fixture clock (07:00/08:00): nearer slots are never offered.
+APPOINTMENT = "2026-11-23T19:00:00+01:00"
+LATER_APPOINTMENT = "2026-11-23T20:00:00+01:00"
 CROSS_REF = "cons-42-cross_asst"
 # Plain refusal from Arena retry 1630002, after the cross_asst consent prompt.
 CROSS_REFUSAL = "Ho il cuore che mi batte forte, sono preoccupato, ma preferirei non condividere troppi dati."

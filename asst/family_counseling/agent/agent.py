@@ -26,7 +26,12 @@ _MAX_PAGE = 8
 # hours ahead is already past when it decides (`reason=past`, Ledger `EXPIRED`). Slots at least _LEAD ahead
 # in agenda time come first, then the ones at least _MIN_LEAD ahead; nearer ones are never offered.
 _LEAD = timedelta(hours=30)
-_MIN_LEAD = timedelta(hours=4)
+_MIN_LEAD = timedelta(hours=10)  # tools/sim_percorsi.py: best minimum; consultorio citizens wait up to 34 min
+_MIN_LEAD_U = timedelta(hours=4)
+
+
+def _min_lead(priority: str | None) -> timedelta:
+    return _MIN_LEAD_U if priority == "U" else _MIN_LEAD
 # Doctor key (the last segment of doctor_id) -> languages, gender, days. ``*`` is the ASST's
 # rare language. The Ledger's slot line names the doctor; it does not repeat this table.
 _DOCTORS: dict[str, tuple[frozenset[str], str, frozenset[str]]] = {
@@ -430,7 +435,7 @@ def _agenda_now(chat: list[Message], real_now: datetime | None = None) -> dateti
 def _lead(priority: str | None) -> timedelta:
     """B and U windows are short (the deadline counts from the citizen's first message to the GP):
     the soonest slot past the minimum wins. Otherwise slots 30 hours ahead come first."""
-    return _MIN_LEAD if priority in ("B", "U") else _LEAD
+    return _min_lead(priority) if priority in ("B", "U") else _LEAD
 
 
 def _ahead(now: datetime, at: datetime) -> timedelta:
@@ -463,7 +468,7 @@ def fitting(
         horizon = None
     else:
         horizon = _agenda_horizon(now, _DEADLINE_DAYS.get(priority or "", 14))
-    earliest = now + _MIN_LEAD
+    earliest = now + _min_lead(priority)
     chosen: list[tuple[datetime, dict[str, str]]] = []
     for line in lines:
         slot = fields_of(line)
@@ -1460,13 +1465,13 @@ def _facility_slots(
         earliest = None
     elif priority == "U":
         horizon = now.replace(hour=23, minute=59, second=59, microsecond=0)
-        earliest = now + _MIN_LEAD
+        earliest = now + _min_lead(priority)
     elif priority == "P":
         horizon = None
-        earliest = now + _MIN_LEAD
+        earliest = now + _min_lead(priority)
     else:
         horizon = _agenda_horizon(now, _DEADLINE_DAYS.get(priority or "", 14))
-        earliest = now + _MIN_LEAD
+        earliest = now + _min_lead(priority)
     chosen: list[tuple[datetime, dict[str, str]]] = []
     reserved = 0
     for line in lines:

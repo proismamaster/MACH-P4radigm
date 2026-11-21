@@ -38,7 +38,7 @@ agenda = Message(type="chat", sender=LEDGER, recipient="agent:noi/cup", msg_id="
 first = Message(type="chat", sender=CIT, recipient="agent:noi/cup", msg_id="m1", need_id="N-1",
                 body={"text": "need.request lang=it"}, sent_at=READ)
 chat = [first, agenda]
-NOW = datetime(2026, 12, 2, 1, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 12, 2, 0, 0, tzinfo=timezone.utc)  # 10:30 is 10.5 hours ahead (minimum 10)
 
 print("Scadenza dalla ricetta")
 until = cup._true_deadline(chat, CIT, "B")
@@ -54,7 +54,7 @@ got = [s["slot_id"] for s in cup.fitting(rows, now=NOW, priority="B", lang="it",
 check("B: 02/12 10:30 si', 03/12 10:30 no (oltre la scadenza vera)", got == ["wed-1030"])
 rows = [line("wed-1430", "2026-12-02T14:30:00.000Z", "wed"), line("wed-1030", "2026-12-02T10:30:00.000Z", "wed")]
 got = [s["slot_id"] for s in cup.fitting(rows, now=NOW, priority="B", lang="it", procedure="VIS-CARD")]
-check("B: il piu' vicino oltre le 4 ore viene prima", got == ["wed-1030", "wed-1430"])
+check("B: il piu' vicino oltre le 10 ore viene prima", got == ["wed-1030", "wed-1430"])
 check("D: resta la preferenza per le 30 ore", cup._lead("D") == cup._LEAD and cup._lead("B") == cup._MIN_LEAD)
 
 print("Date dei partner in UTC")

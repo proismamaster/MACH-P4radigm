@@ -512,8 +512,8 @@ async def anticipo_degli_slot() -> None:
             slot("C-50h", "2026-11-25T09:30:00.000Z", "wed"),  # mercoledi' 10:30: 50 ore e mezza
             slot("D-52h", "2026-11-25T11:00:00.000Z", "wed")]
     got, h = await offered(mon, rows)
-    check("lunedi' 08:00: prima gli slot a 30 ore o piu' (C, D), poi A; B dopo; N-3h mai",
-          got == ["C-50h", "D-52h", "A-6h"], h)
+    check("lunedi' 08:00: prima gli slot a 30 ore o piu' (C, D), poi B (26 ore); A (6 ore) e N-3h mai",
+          got == ["C-50h", "D-52h", "B-26h"], h)
 
     fri = "2026-11-20T17:00:00+01:00"  # venerdi' 17:00: il weekend non esiste nell'agenda
     rows = [slot("MON-17h", "2026-11-23T09:30:00.000Z", "mon"),  # lunedi' 10:30: 17 ore e mezza d'agenda
@@ -544,12 +544,12 @@ async def mach13_e_slot_passati() -> None:
           "slot_id=V-1" not in out and "reason=no_availability" in out, h)
 
     cit = "citizen:t02/c-0900"
-    near = slot("P-near", "2026-11-23T13:00:00.000Z", "mon")   # 14:00 locali, 6 ore dopo le 08:00
+    near = slot("P-near", "2026-11-23T19:00:00.000Z", "mon")   # 20:00 locali, 12 ore dopo le 08:00
     later = slot("P-later", "2026-11-25T09:30:00.000Z", "wed")
     h = harness([near, later])
     await h.turn(cit, "vorrei una visita ginecologica")
     h.port.log.append(tf.Message(type="chat", sender=tf.LEDGER, recipient=ME, msg_id="ag-late",
-                                 need_id=h.need, body={"text": "agenda agenda_now=2026-11-23T13:30:00+01:00"}))
+                                 need_id=h.need, body={"text": "agenda agenda_now=2026-11-23T19:30:00+01:00"}))
     await h.turn(cit, "confirm offer_id=of-P-near consent_ref=cons-N-booking")
     check("confirm di uno slot a mezz'ora: nessun hold", not any("slot_id=P-near" in t for t in h.out(tf.LEDGER, "hold")), h)
     check("... e cancel reason=past al cittadino", any("reason=past" in t and "slot_id=P-near" in t

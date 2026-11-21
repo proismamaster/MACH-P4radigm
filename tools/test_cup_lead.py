@@ -38,13 +38,17 @@ TOO_NEAR = line("too-near", "2026-11-23T13:30:00+01:00", "mon")  # tra mezz'ora
 
 
 class LeadTests(unittest.TestCase):
-    def test_slot_closer_than_four_hours_is_dropped(self):
-        got = cup.fitting([NEAR, TOO_NEAR, LATER], now=NOW, priority="D", lang="en")
-        self.assertEqual([s["slot_id"] for s in got], ["later"])
+    def test_slot_closer_than_ten_hours_is_dropped(self):
+        got = cup.fitting([NEAR, TOO_NEAR, LATER, TUE], now=NOW, priority="D", lang="en")
+        self.assertEqual([s["slot_id"] for s in got], ["tue"])
 
     def test_slots_thirty_hours_ahead_come_first(self):
         got = cup.fitting([LATER, TUE, WED], now=NOW, priority="D", lang="en")
-        self.assertEqual([s["slot_id"] for s in got], ["wed", "later", "tue"])
+        self.assertEqual([s["slot_id"] for s in got], ["wed", "tue"])
+
+    def test_urgent_keeps_four_hours(self):
+        got = cup.fitting([LATER, TUE], now=NOW, priority="U", lang="en")
+        self.assertEqual([s["slot_id"] for s in got], ["later"])
 
     def test_the_weekend_does_not_count_as_agenda_time(self):
         fri = datetime(2026, 11, 20, 17, 0, tzinfo=TZ)  # venerdi' 17:00
