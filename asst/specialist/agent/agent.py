@@ -14,7 +14,7 @@ import os
 import re
 from collections import OrderedDict
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from city_sdk.city import LEDGER, CapError, City, Message, Need, OutOfScope, clinical, understood
@@ -376,7 +376,9 @@ async def _facility(
 ) -> None:
     head = first_word(message.text)
     kind = words(message.text)
-    if message.sender == LEDGER and head == "held":
+    if message.sender.startswith("agent:") and head == "need.request":
+        await _answer_partner_search(city, message)
+    elif message.sender == LEDGER and head == "held":
         await _on_held(city, message, chat)
     elif message.sender == LEDGER and head == "committed":
         await _on_committed(city, message, chat)
@@ -392,6 +394,111 @@ async def _facility(
         await _on_report_consent(city, message, chat)
     elif "confirm" in kind:
         await _on_confirm(city, message, chat, hold_self=hold_self)
+
+
+# --- ricerca dai centri prenotazioni di altre ASST (formato comune del livello 4, MACH-1.x) -----
+# need.request service_type=specialist_care.cardiology procedure=VIS-CARD priority=B request_id=...
+# [lang=] [gender_preference=] [days=mon/wed]: one message back, offer lines or a cancel. No citizen
+# data travels here; the confirm that follows (after the cross_asst consent) goes to _on_confirm.
+_SPEC_DOCTORS = {  # registry, asst-bicocca
+    "asst-bicocca-s1": ("it/en", "m", frozenset({"mon", "wed", "fri"})),
+    "asst-bicocca-s2": ("it", "f", frozenset({"tue", "thu"})),
+}
+_SPEC_PROCEDURES = frozenset({"VIS-CARD", "CTRL-CARD"})
+_WEEK = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+_ANSWERED_SEARCHES: OrderedDict[str, None] = OrderedDict()
+
+
+def _search_when(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _search_slots(slots_text: str, *, now: datetime, me: str, fields: dict[str, str]) -> list[dict[str, str]]:
+    priority = (fields.get("priority") or "").upper()
+    if priority == "U":
+        horizon: datetime | None = now.replace(hour=23, minute=59, second=59, microsecond=0)
+    elif priority == "P":
+        horizon = None
+    else:
+        horizon = now + timedelta(days=_DEADLINE_DAYS.get(priority, 14))
+    lang = fields.get("lang", "").lower()
+    gender = (fields.get("gender_preference") or fields.get("gender") or "").lower()
+    days = set(re.split(r"[/,;\s]+", fields.get("days", "").lower())) & set(_WEEK)
+    chosen: list[tuple[datetime, dict[str, str]]] = []
+    for line in slots_text.splitlines():
+        slot = fields_of(line)
+        at = _search_when(slot.get("at", "") or slot.get("agenda_date", ""))
+        if not slot.get("slot_id") or at is None or slot.get("facility", me) != me:
+            continue
+        if not now + _LEAD < at or (horizon is not None and at >= horizon):
+            continue
+        free = slot.get("free", slot.get("capacity", "1"))
+        if not free.isdecimal() or int(free) <= 0:
+            continue
+        if slot.get("urgent_reserve", "").lower() == "true" and priority != "U":
+            continue
+        doctor = _SPEC_DOCTORS.get(slot.get("doctor_id", ""))
+        day = _WEEK[at.weekday()]
+        if doctor is None or day not in doctor[2] or (days and day not in days):
+            continue
+        if (lang and lang not in doctor[0].split("/")) or (gender in {"m", "f"} and gender != doctor[1]):
+            continue
+        slot["at"], slot["day"] = at.isoformat(), day
+        chosen.append((at, slot))
+    chosen.sort(key=lambda item: (item[0], item[1]["slot_id"]))
+    return [slot for _, slot in chosen]
+
+
+async def _answer_partner_search(city: City, message: Message) -> None:
+    fields = fields_of(message.text)
+    rid = fields.get("request_id", "")
+    if not rid or rid in _ANSWERED_SEARCHES:
+        return
+    _ANSWERED_SEARCHES[rid] = None
+    if len(_ANSWERED_SEARCHES) > _SENT_NEEDS:
+        _ANSWERED_SEARCHES.popitem(last=False)
+    service, procedure = fields.get("service_type", ""), fields.get("procedure", "") or "VIS-CARD"
+    if (service and not service.startswith("specialist_care")) or procedure not in _SPEC_PROCEDURES:
+        await _say(city, message.sender, f"cancel reason=procedure_not_offered request_id={rid}")
+        return
+    await _say(city, LEDGER, "agenda")
+    await _say(city, LEDGER, f"world procedure={procedure} page=1")
+    slots_text, now = None, None
+    for attempt in range(_PULL_TRIES):
+        try:
+            rows = await city.history(need_id=message.need_id)
+        except CapError:
+            rows = []
+        for row in rows:
+            if row.sender != LEDGER:
+                continue
+            if first_word(row.text) == "slots" and f"procedure={procedure}" in row.text:
+                slots_text = row.text
+            elif first_word(row.text) == "agenda":
+                now = _search_when(fields_of(row.text).get("agenda_now", "")) or now
+        if slots_text and now:
+            break
+        if attempt + 1 < _PULL_TRIES:
+            await asyncio.sleep(_PULL_PAUSE)
+    if not slots_text or now is None:
+        await _say(city, message.sender, f"cancel reason=facility_unavailable request_id={rid}")
+        return
+    me = city.agent_id
+    lines = []
+    for slot in _search_slots(slots_text, now=now, me=me, fields=fields)[:3]:
+        lang, sex, _ = _SPEC_DOCTORS[slot["doctor_id"]]
+        lines.append(
+            f"offer offer_id=of-{slot['slot_id']} slot_id={slot['slot_id']} doctor_id={slot['doctor_id']} "
+            f"facility={me} procedure={procedure} agenda_date={slot['at']} agenda_day={slot['day']} "
+            f"expiry={slot['at']} doctor_lang={lang} doctor_gender={sex} request_id={rid}"
+        )
+    if not lines:
+        lines = [f"cancel reason=no_availability request_id={rid} procedure={procedure}"]
+    await _say(city, message.sender, "\n".join(lines))
 
 
 def _booking_of(chat: list[Message], agent: str, slot_id: str) -> tuple[str, str, str | None]:
