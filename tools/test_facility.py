@@ -186,7 +186,14 @@ async def prova_a() -> None:
           all(f"slot_id={s}" not in body for s in ("S-2", "S-3", "S-4", "S-9")), h)
     check("nessun dato cittadino nella ricerca", "citizen" not in body, h)
     await h.turn(CUP_EXT, SEARCH)  # ritrasmissione dello stesso request_id
-    check("ritrasmissione: nessuna seconda risposta", len(h.out(CUP_EXT, "offer")) == 1, h)
+    again = h.out(CUP_EXT, "offer")
+    check("L7 ritrasmissione: stessa request_id = stesse offerte, parola per parola",
+          len(again) == 2 and again[1] == again[0], h)
+    h.world.slots["VIS-FIS:1"] = slots_reply(HOSP, ROWS[3:4])  # il Ledger cambia nel frattempo
+    await h.turn(CUP_EXT, SEARCH)
+    again = h.out(CUP_EXT, "offer")
+    check("L7 ritrasmissione dopo un cambio del Ledger: ancora le stesse offerte",
+          len(again) == 3 and again[2] == again[0], h)
 
     h = Harness("hospital.physiatry", HOSP,
                 World(HOSP, {"VIS-FIS:1": slots_reply(HOSP, ROWS[1:3])}))
@@ -259,9 +266,10 @@ async def prova_b() -> None:
           order.index("hold") < order.index("commit") < order.index("booking.receipt"), h)
 
     await h.turn(CUP_OWN, CONFIRM)
-    check("confirm duplicato: nessun secondo hold/commit/ricevuta",
+    receipts = h.out(CUP_OWN, "booking.receipt")
+    check("L7 confirm duplicato: nessun secondo hold/commit, stessa ricevuta parola per parola",
           len(h.out(LEDGER, "hold")) == 1 and len(h.out(LEDGER, "commit")) == 1
-          and len(h.out(CUP_OWN, "booking.receipt")) == 1, h)
+          and len(receipts) == 2 and receipts[1] == receipts[0], h)
 
     await h.turn(CIT, "checkin booking_id=BK-H-1 ledger_ref=LR-H-1")
     checkins = h.out(LEDGER, "checkin")
@@ -275,9 +283,9 @@ async def prova_b() -> None:
         h = Harness("hospital.physiatry", HOSP, World(HOSP, refuse={op: code}))
         await h.turn(CUP_OWN, CONFIRM)
         cancels = h.out(CUP_OWN, "cancel")
-        check(f"rifiuto {op} del Ledger: cancel al CUP con motivo {code}, nessuna ricevuta",
-              len(cancels) == 1 and f"reason={code}" in cancels[0] and "offer_id=of-x-1" in cancels[0]
-              and not h.out(CUP_OWN, "booking.receipt"), h)
+        check(f"L8 rifiuto {op} del Ledger: cancel al CUP con reason={code.lower()}, nessuna ricevuta",
+              len(cancels) == 1 and f"reason={code.lower()}" in cancels[0].split()
+              and "offer_id=of-x-1" in cancels[0] and not h.out(CUP_OWN, "booking.receipt"), h)
 
 
 FC = "agent:t02/family_counseling"
@@ -479,6 +487,91 @@ async def prova_e() -> None:
               f"nessuna risposta", elapsed < 3 and not h.out("agent:t77"), h)
 
 
+F_ROWS = [
+    "slot_id=S-1 doctor_id=D-x1 facility=ME procedure=VIS-FIS at=2026-11-24T09:00:00+01:00 day=tue free=1",
+    "slot_id=S-6 doctor_id=D-x2 facility=ME procedure=VIS-FIS at=2026-11-24T10:30:00+01:00 day=tue free=1",
+    "slot_id=S-5 doctor_id=D-x1 facility=ME procedure=VIS-FIS at=2026-11-24T15:00:00+01:00 day=tue free=1",
+    "slot_id=S-7 doctor_id=D-x1 facility=ME procedure=VIS-FIS at=2026-11-24T17:00:00+01:00 day=tue free=1",
+    "slot_id=S-8 doctor_id=D-x2 facility=ME procedure=VIS-FIS at=2026-11-25T11:00:00+01:00 day=wed free=1",
+]
+F_CONFIRM = (f"confirm offer_id=of-S-1 slot_id=S-1 citizen={CIT} consent_ref=cons-F-booking "
+             "cross_asst_consent_ref=cons-F-cross prescription_number=prescription_number-F-1 "
+             f"request_id=rq-T1 facility={HOSP}")
+
+
+def after_line(h: Harness, marker: str, to: str) -> list[str]:
+    """I messaggi dell'ospedale a ``to`` scritti dopo la prima riga che inizia con ``marker``."""
+    log = h.port.log
+    start = next((i for i, r in enumerate(log) if r.text.startswith(marker)), len(log))
+    return [r.text for r in log[start:] if r.sender == HOSP and r.recipient == to]
+
+
+async def prova_f() -> None:
+    print("Prova F - livello 6: prenotazione annullata, riprenotazione in un solo messaggio")
+    for label, fault, booking in (
+        ("fault.cancel", "fault.cancel booking_id=BK-H-1 reason=facility_cancelled", "BK-H-1"),
+        ("hold scaduto", "hold.expired hold_id=H-1 reason=facility_cancelled", "H-1"),
+    ):
+        h = Harness("hospital.physiatry", HOSP, World(HOSP, {"VIS-FIS:1": slots_reply(HOSP, F_ROWS)}))
+        await h.turn(CUP_EXT, SEARCH)
+        await h.turn(CUP_EXT, F_CONFIRM)
+        check(f"[{label}] prima della prova: ricevuta al CUP per S-1",
+              any("slot_id=S-1" in t for t in h.out(CUP_EXT, "booking.receipt")), h)
+        await h.turn(LEDGER, fault)
+        out = after_line(h, fault.split()[0], CUP_EXT)
+        first = out[0].splitlines()[0] if out else ""
+        offers = [line for line in out[0].splitlines()[1:]] if out else []
+        check(f"[{label}] un solo messaggio a chi ha prenotato (il CUP)", len(out) == 1, h)
+        check(f"[{label}] prima riga: cancel reason=facility_cancelled booking_id={booking}",
+              first.split()[:1] == ["cancel"] and "reason=facility_cancelled" in first.split()
+              and f"booking_id={booking}" in first.split(), h)
+        slots = [dict(w.split("=", 1) for w in o.split()[1:] if "=" in w).get("slot_id") for o in offers]
+        check(f"[{label}] sotto, fino a 3 offerte: prima lo stesso medico (S-5, S-7), poi S-6",
+              all(o.startswith("offer ") for o in offers) and slots == ["S-5", "S-7", "S-6"], h)
+        check(f"[{label}] offerte con request_id del CUP, mai lo slot annullato, nessun dato cittadino",
+              all("request_id=rq-T1" in o.split() for o in offers)
+              and "slot_id=S-1" not in " ".join(offers) and "citizen" not in " ".join(out), h)
+        await h.turn(LEDGER, fault)
+        check(f"[{label}] stesso annullo ripetuto: nessun secondo messaggio",
+              len(after_line(h, fault.split()[0], CUP_EXT)) == 1, h)
+
+    h = Harness("hospital.physiatry", HOSP, World(HOSP, {"VIS-FIS:1": slots_reply(HOSP, F_ROWS)}))
+    await h.turn("agent:t77/sconosciuto", "fault.cancel booking_id=BK-H-1 reason=facility_cancelled")
+    check("annullo da un agente qualsiasi (non Ledger, non citta'): ignorato", not h.out(""), h)
+
+
+async def prova_g() -> None:
+    print("Prova G - livello 8: codici del Ledger al CUP e regola P2 riletta sul confirm")
+    for op, code, head, token in (("hold", "SLOT_UNKNOWN", "hold_refused", "ledger_code=SLOT_UNKNOWN"),
+                                  ("commit", "RULE_VIOLATION", "hold_refused", "ledger_code=RULE_VIOLATION"),
+                                  ("hold", "CONSENT_MISSING", "cancel", "reason=consent_missing")):
+        h = Harness("hospital.physiatry", HOSP, World(HOSP, refuse={op: code}))
+        await h.turn(CUP_OWN, CONFIRM)
+        sent = h.out(CUP_OWN, head)
+        other = h.out(CUP_OWN, "cancel" if head == "hold_refused" else "hold_refused")
+        check(f"rifiuto {op} {code}: {head} ... {token}, offer_id e slot_id, nient'altro",
+              len(sent) == 1 and token in sent[0].split() and "offer_id=of-x-1" in sent[0]
+              and "slot_id=S-1" in sent[0] and not other and not h.out(CUP_OWN, "booking.receipt"), h)
+
+    # P2 cambia a meta' partita: il confirm di un CUP esterno rilegge `rules` adesso.
+    world = LiveWorld(HOSP)
+    world.rules = "rules P2=on"
+    h = LiveHarness("hospital.physiatry", HOSP, world)
+    h.spawn(LEDGER, "rules none")  # lettura vecchia nella cronologia: P2 spenta
+    await h.settle()
+    h.spawn(CUP_EXT, f"confirm offer_id=of-a1-1 slot_id=S-1 citizen={CIT} consent_ref=cons-N-booking "
+                     f"prescription_number=prescription_number-N-1 facility={HOSP}")
+    await h.settle()
+    check("P2 accesa adesso (rules vecchio diceva spenta): nessun hold senza consenso cross",
+          not h.out(LEDGER, "hold"), h)
+    check("P2 accesa: cancel reason=consent_missing al CUP esterno",
+          any("reason=consent_missing" in t.split() for t in h.out(CUP_EXT, "cancel")), h)
+    world.rules = "rules none"
+    h.spawn(CUP_EXT, f"confirm offer_id=of-a1-2 slot_id=S-5 citizen={CIT} consent_ref=cons-N-booking "
+                     f"prescription_number=prescription_number-N-1 facility={HOSP}")
+    await h.settle()
+    check("P2 spenta di nuovo: hold sullo slot confermato",
+          any("slot_id=S-5" in t for t in h.out(LEDGER, "hold")), h)
 async def prova_h() -> None:
     """custody.ack, la causa vera: le prove della conformance non hanno need_id.
 
@@ -536,6 +629,8 @@ async def run() -> None:
         await prova_b()
         await prova_d()
     await prova_e()
+    await prova_f()
+    await prova_g()
     await prova_h()
     print(f"\n{'TUTTO OK' if not FAILS else str(len(FAILS)) + ' FALLITE'}")
     sys.exit(1 if FAILS else 0)
