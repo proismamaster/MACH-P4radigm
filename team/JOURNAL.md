@@ -1,5 +1,20 @@
 # Journal (la voce più recente in alto)
 
+## 2026-11-21 12:30 — Ismail (Opus) — Specialist, GP e CUP: dove si perdono le prenotazioni
+
+**Misure (console)**
+- Ultimi 90 percorsi chiusi (11:20): GP `protocol_match` +162, CUP `no_booking` -56, alternativa rilassata 0 (23), strutture ~0. Il problema non sono i singoli agenti: quasi nessuna prenotazione arriva in fondo.
+- 71 falliti 10:08-11:08 UTC (CUP 1.0.24): rifiuti del cittadino `deadline` 69, `gender` 22, `day` 16; offerta -> conferma mediana 19 minuti reali (= ore d'agenda), da 3 a 35; 12 conferme trovano lo slot gia' passato; consultorio 5 cancel `reason=past` su 6 conferme; nessuna offerta dei partner.
+
+**Fatto (online)**
+- Specialist 1.0.5-1.0.7: referto dopo 2 s senza risposta al consenso (20 s facevano fallire la conformance `health: p99`), rifiuto tardivo del Ledger abbinato allo slot giusto con il codice originale, commit degli hold rimasti senza commit a ogni turno successivo, retry di `city.history()` sui 5xx (#91, #92, #101, #107, #110).
+- CUP 1.0.24-1.0.26: controllo dei tempi della conferma (#94), 5 offerte varie (#115), B preferisce slot ad almeno 20 ore dentro la scadenza vera (#119).
+- GP 1.0.6: dopo `prescribe` aspetta `prescribed` nella storia fino a 90 s (405: ricetta sul Ledger mai annunciata) (#122).
+
+**Problemi aperti**
+- Consultorio: `_MIN_LEAD` 10 ore, troppo vicino (5 `past` su 6). Portarlo a ~18 ore rompe 5 controlli dei test di Hapca: lo fa Hapca.
+- Partner: rispondono `no_availability` mentre i verdetti contano 130-650 posti validi. Ipotesi da verificare: i campi MACH-1.4 `earliest`/`deadline` letti in un'altra base oraria.
+
 ## 2026-11-21 12:08 — Abed — CUP: partner incompatibili e scadenza delle alternative
 
 **Fatto**
