@@ -10,10 +10,10 @@ Dalla cartella della repo: python tools/test_cup_varieta.py  (riusa il Mailbox d
 import os
 import sys
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import test_cup_l5_vincoli as base  # noqa: E402
-base.cup._CUP_OFFERS_PER_BATCH = 3  # questi test sono scritti per 3 offerte; le 5 si provano in test_cup_medici
 
 GENDER = {"h1": "f", "h2": "m", "h3": "m"}
 
@@ -22,6 +22,7 @@ def mix(offers):
     return [(o["slot_id"], o["agenda_day"], GENDER[o["doctor_id"]]) for o in offers]
 
 
+@patch.object(base.cup, "_CUP_OFFERS_PER_BATCH", 3)
 class VarietyTests(unittest.IsolatedAsyncioTestCase):
     async def test_physiotherapy_pain_prose_then_gender_refusal(self):
         box = base.Mailbox("physio-pain", "D", [
