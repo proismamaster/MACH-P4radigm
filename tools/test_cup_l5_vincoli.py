@@ -15,6 +15,7 @@ spec = importlib.util.spec_from_file_location("cup_l5", path)
 cup = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = cup
 spec.loader.exec_module(cup)
+cup._WAIT_SECONDS = 0.0  # the fake Ledger answers in the next turn: no patient wait
 
 CITIZEN = "citizen:fixture"
 AGENT = "agent:fixture/booking_centre"

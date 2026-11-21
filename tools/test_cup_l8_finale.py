@@ -21,6 +21,7 @@ spec = importlib.util.spec_from_file_location("cup", os.path.join(REPO, "asst", 
 cup = importlib.util.module_from_spec(spec)
 sys.modules["cup"] = cup
 spec.loader.exec_module(cup)
+cup._WAIT_SECONDS = 0.0  # the fake Ledger answers in the next turn: no patient wait
 
 FAILS = []
 
