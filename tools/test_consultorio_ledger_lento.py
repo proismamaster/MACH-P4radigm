@@ -65,11 +65,12 @@ class Ledger(tf.World):
     """Il Ledger della console: un hold su uno slot gia' tenuto e' NO_CAPACITY, su uno slot passato e'
     EXPIRED, un commit con la fence scaduta e' STALE_FENCE."""
 
-    def __init__(self, now="2026-12-14T18:00:35.254Z"):
+    def __init__(self, now="2026-12-14T18:00:35.254Z", page1=None):
         def page(rows, number):  # la riga di testa vera: wave_id e asst (le letture si condividono per ondata)
             return tf.slots_reply(ME, rows, number).replace(
                 "slots page=", "slots wave_id=W01QQQ asst=asst-bicocca page=", 1)
-        super().__init__(ME, {f"{PROC}:1": page(PAGE1, "1/2"), f"{PROC}:2": page(PAGE2, "2/2")})
+        super().__init__(ME, {f"{PROC}:1": page(PAGE1 if page1 is None else page1, "1/2"),
+                              f"{PROC}:2": page(PAGE2, "2/2")})
         self.now = now
         self.held: dict[str, str] = {}      # slot -> hold_id
         self.booked: set[str] = set()
@@ -281,6 +282,10 @@ class Arena(tf.Harness):
         super().__init__(CAP, ME, world, need=need)
         self.reads, self.n_reads, self.queue = reads, 0, []
         self.snapshot: list[tf.Message] = []
+        # Un rilascio: `route(push)` da' il pod che riceve quel push (None: questo), `order(item)` e' la chiave con
+        # cui i push in coda arrivano (il Relay li consegna quando vuole).
+        self.route = None
+        self.order = None
         real_post, real_history = self.port.post, self.port.history
 
         async def post(*, to, message_type, body, need_id, conversation_id, traceparent):
@@ -316,6 +321,8 @@ class Arena(tf.Harness):
         self.port.log.append(msg)
         await self.run_one(msg)
         self.snapshot = list(self.port.log)  # com'e' il caso quando il turno finisce, prima dei push
+        if self.order is not None:
+            self.queue.sort(key=self.order)
         while True:
             nxt = next((q for q in self.queue if not q[2]), None)
             if nxt is None:
@@ -323,7 +330,8 @@ class Arena(tf.Harness):
             nxt[2] = True
             if nxt[1].msg_id not in {r.msg_id for r in self.port.log}:
                 self.port.log.append(nxt[1])
-            await self.run_one(nxt[1])
+            pod = self.route(nxt[1]) if self.route is not None else None
+            await (pod(nxt[1]) if pod is not None else self.run_one(nxt[1]))
 
     def before_push(self, to: str, word: str) -> list[str]:
         """I messaggi di tipo `word` mandati a `to` dentro il turno, prima che arrivi un push."""
@@ -568,6 +576,127 @@ async def riprova_gia_in_corso() -> None:
           and len(offered(h, CIT_A)) == offer_n, h)
 
 
+def piccola() -> Ledger:
+    """Pagina 1 con un solo slot valido: rifiutato quello, le offerte sostitutive vengono dalla pagina 2."""
+    return Ledger(page1=[slot("20261215", "1030", "tue")])
+
+
+def pagina_due(h: tf.Harness) -> int:
+    return sum(1 for r in h.port.log if r.sender == ME and r.recipient == tf.LEDGER and "page=2" in r.text.split())
+
+
+async def cambio_di_pod() -> None:
+    print("Un rilascio a meta': il pod nuovo legge dalla cronologia cio' che il vecchio ha fatto (003810002)")
+    # Console 21/11 11:07 UTC: il pod 1.0.12 gestisce il secondo STALE_FENCE (cancel, agenda e world) e viene
+    # fermato; l'agente nuovo riceve di nuovo il rifiuto e le risposte del Ledger. Lo stato che stava solo
+    # nella memoria del vecchio (la riprova gia' fatta, le offerte sostitutive in sospeso) deve stare
+    # nella cronologia: nessun terzo hold per un cittadino a cui e' gia' stato scritto "cancel", e le
+    # offerte arrivano comunque.
+    scenari = (
+        ("pagina 2 da chiedere, tutti i push al pod nuovo", piccola, None, lambda m: True),
+        ("... la pagina 2 arriva prima dei rifiuti", piccola,
+         lambda item: 0 if item[1].text.startswith("slots") else 1, lambda m: True),
+        ("... al pod nuovo solo la pagina 2", piccola, None, lambda m: m.text.startswith("slots")),
+        ("offerte gia' mandate dal pod vecchio, tutti i push al pod nuovo", Ledger, None, lambda m: True),
+    )
+    for nome, ledger, order, goes in scenari:
+        h = Arena(ledger(), reads=2)
+        h.world.stale = 99
+        await open_case(h, N_A, CIT_A)
+        a = offered(h, CIT_A)
+        pod = altro_pod(h)
+        h.order = order
+        h.route = lambda m, goes=goes, pod=pod: pod if goes(m) else None
+        await confirm(h, N_A, CIT_A, a[0])
+        again = offered(h, CIT_A)[len(a):]
+        check(f"{nome}: due hold e due commit, nessun terzo hold",
+              len(h.out(tf.LEDGER, "hold")) == 2 and len(h.out(tf.LEDGER, "commit")) == 2, h)
+        check("... un solo cancel al cittadino", len(cancels(h, CIT_A)) == 1, h)
+        check("... una sola serie di offerte sostitutive, senza lo slot rifiutato e senza doppioni",
+              batches(h, CIT_A) == 2 and 0 < len(again) <= 3 and len(again) == len(set(again)) and a[0] not in again, h)
+        check("... la pagina 2 si chiede una volta sola", pagina_due(h) <= 1, h)
+        if ledger is piccola:
+            check("... e le offerte vengono dalla pagina 2", all("-20261216-" in s for s in again), h)
+
+    # Il confirm del cittadino consegnato di nuovo al pod nuovo (il turno che lo aspettava e' stato interrotto).
+    holds, spoken = len(h.out(tf.LEDGER, "hold")), len(h.out(CIT_A))
+    mine = [r for r in h.port.log if r.sender == CIT_A and r.text.startswith("confirm")][-1]
+    await altro_pod(h)(mine)
+    check("il confirm consegnato di nuovo al pod nuovo: nessun hold, nessun messaggio al cittadino in piu'",
+          len(h.out(tf.LEDGER, "hold")) == holds and len(h.out(CIT_A)) == spoken, h)
+
+    # I due pod si sovrappongono nel rilascio: il nuovo ha letto il caso un attimo prima che il vecchio mandasse
+    # le offerte. Sotto il lock del caso rilegge la cronologia e vede che ci sono.
+    h = Arena(Ledger(), reads=2)
+    h.world.stale = 99
+    await open_case(h, N_A, CIT_A)
+    a = offered(h, CIT_A)
+    await confirm(h, N_A, CIT_A, a[0])
+    at = max(i for i, r in enumerate(h.port.log) if r.sender == ME and r.recipient == CIT_A and r.text.startswith("cancel"))
+    stale = h.port.log[:at + 1]  # il caso com'era col cancel e senza le offerte sostitutive
+    slots_row = [r for r in h.port.log if r.sender == tf.LEDGER and r.text.startswith("slots")][-1]
+    pod = tf.load(CAP, ME)
+    pod._WAIT_SECONDS = 0.0
+    city = tf.City(index=tf.Index(), messages=h.port, history=h.port, agent_id=ME, inbound=slots_row)
+    await pod._advance(city, slots_row, stale, fixed="CONS-GIN", replacing=False)
+    check("un pod che ha letto il caso un attimo prima delle offerte del vecchio non ne manda altre",
+          batches(h, CIT_A) == 2, h)
+
+    # Il cittadino riconferma lo slot che ha ricevuto in cancel, e il confirm lo legge il pod nuovo (11:12 UTC
+    # per 003810002): nessun hold su uno slot gia' annullato, e una risposta (le offerte), non il silenzio.
+    h = make()
+    a = await open_case(h, N_A, CIT_A)
+    h.world.held[a[0]] = "bk-altro"
+    await confirm(h, N_A, CIT_A, a[0])
+    holds, spoken = len(h.out(tf.LEDGER, "hold")), len(h.out(CIT_A))
+    again = tf.Message(type="chat", sender=CIT_A, recipient=ME, msg_id=tf.uuid4().hex, need_id=N_A,
+                       conversation_id="c-1", body={"text": f"confirm consent_ref=cons-{N_A}-booking offer_id=of-{a[0]}"})
+    h.port.log.append(again)
+    await altro_pod(h)(again)
+    check("riconferma dello slot annullato letta dal pod nuovo: nessun hold in piu'",
+          len(h.out(tf.LEDGER, "hold")) == holds, h)
+    check("... e una risposta al cittadino, che non rimette in offerta quello slot",
+          len(h.out(CIT_A)) > spoken and a[0] not in offered(h, CIT_A)[len(a):], h)
+
+    # Nello stesso caso c'e' anche la ricerca di un altro CUP (003810002): le risposte del Ledger servono tutti e due.
+    h = Arena(piccola(), reads=2)
+    h.world.stale = 99
+    await open_case(h, N_A, CIT_A)
+    a = offered(h, CIT_A)
+    search = tf.Message(type="chat", sender=CUP, recipient=ME, msg_id=tf.uuid4().hex, need_id=N_A,
+                        conversation_id="c-1", body={"text": SEARCH.format(r="rq-mix")})
+
+    def cup_arrives(push):
+        if push.text.startswith("slots") and "page=2/2" in push.text.split("\n")[0].split():
+            h.port.log.append(search)  # arriva mentre il caso aspetta la pagina 2
+        return None
+
+    h.route = cup_arrives
+    await confirm(h, N_A, CIT_A, a[0])
+    again = offered(h, CIT_A)[len(a):]
+    check("caso con la ricerca di un CUP: le offerte sostitutive arrivano col Ledger, una volta, dalla pagina 2",
+          batches(h, CIT_A) == 2 and bool(again) and all("-20261216-" in s for s in again), h)
+    check("... e il CUP riceve le sue offerte", bool(h.out(CUP, "offer")), h)
+
+    # Il pod vecchio e' morto tra il rifiuto e il cancel: nella cronologia non c'e' ne' l'uno ne' le offerte.
+    h = Arena(Ledger(), reads=2)
+    h.world.stale = 99
+    await open_case(h, N_A, CIT_A)
+    a = offered(h, CIT_A)
+    await confirm(h, N_A, CIT_A, a[0])
+    refusal = [r for r in h.port.log if r.sender == tf.LEDGER and r.text.startswith("refused commit")][-1]
+    ours = [r for r in h.port.log if r.sender == ME and r.recipient == CIT_A]
+    lost = {r.msg_id for r in ours if r.text.split()[0] == "cancel"} | \
+        {r.msg_id for r in [r for r in ours if r.text.startswith("offer ")][1:]}
+    h.port.log[:] = [r for r in h.port.log if r.msg_id not in lost]
+    await altro_pod(h)(refusal)
+    again = offered(h, CIT_A)[len(a):]
+    check("il vecchio pod non ha mandato il cancel: il pod nuovo non ripete l'hold (ce n'erano gia' due)",
+          len(h.out(tf.LEDGER, "hold")) == 2, h)
+    check("... ma manda il cancel e le offerte sostitutive, una volta",
+          len(cancels(h, CIT_A)) == 1 and batches(h, CIT_A) == 2 and bool(again) and a[0] not in again, h)
+
+
 def segni() -> None:
     print("Slot non liberi: scadenza e proprietario dei segni")
     h = make()
@@ -607,6 +736,7 @@ async def run() -> None:
     await sostitutive_dopo_l_attesa()
     await cancel_past_e_pagina_due()
     await riprova_gia_in_corso()
+    await cambio_di_pod()
     segni()
     print(f"\n{'TUTTO OK' if not tf.FAILS else str(len(tf.FAILS)) + ' FALLITE'}")
     sys.exit(1 if tf.FAILS else 0)

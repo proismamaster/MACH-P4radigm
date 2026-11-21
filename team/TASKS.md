@@ -59,7 +59,7 @@ Livello 5 «Vincoli combinati»: priorità, lingue e disponibilità si sovrappon
 | CUP: riprovare la lettura della cronologia su 5xx senza perdere i riferimenti della conferma | Abed: in revisione | PR #106 · `abed/cup-history-timeout` |
 | Verdetto di cardiologia con le righe dello specialist (per il follow-up) | da cercare in console | — |
 | Riga `facts` MACH-1.3 per le nostre strutture su Discord | Alberto | — |
-| Consultorio: NO_CAPACITY (2560005, 3290003), STALE_FENCE, EXPIRED, attesa paziente, rifiuti del Relay; misura di hold e commit separata dalla prima offerta | pronto in `hapca/consultorio-ledger-lento`, da pubblicare (online 1.0.9) | `fb886bb`, `252d91d` |
+| Consultorio: NO_CAPACITY (2560005, 3290003), STALE_FENCE, EXPIRED, attesa paziente, rifiuti del Relay; misura di hold e commit separata dalla prima offerta | online 1.0.13 (11:07 UTC); il cambio di pod (terzo hold, offerte dovute, caso con ricerca di un CUP) è corretto in `hapca/consultorio-stato-dalla-cronologia`, da pubblicare | `fb886bb`, `252d91d`, `46cd327` |
 | Ospedale e specialist: stessa attesa paziente e stesso segno degli slot presi (NO_CAPACITY 28/42 e 112, STALE_FENCE 10/12 e 17/24) | da fare, file di Andrei e di Ismail | — |
 
 ## Deploy

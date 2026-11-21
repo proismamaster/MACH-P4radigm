@@ -1,6 +1,25 @@
 
 # Problemi
 
+## Consultorio 1.0.13 e il cambio di pod (21/11, messaggi fino alle 11:23 UTC)
+
+- **Un terzo hold dopo il cancel.** `N-2026-11-02-8909110003810002` (orari `sent_at`, UTC):
+
+| ora | evento |
+|---|---|
+| 10:44:00, 10:55:42 | hold e riprova sullo slot `…20261225-1030` |
+| 11:06:57 | `refused commit code=STALE_FENCE` (il secondo) |
+| 11:07:03 | cancel al cittadino (pod 1.0.12, fermato alle 11:07:50 circa), `agenda` e `world page=1` chiesti |
+| 11:12:09 | il cittadino conferma di nuovo lo stesso slot (push consegnato al pod nuovo alle 11:13) |
+| 11:13:05 | **terzo hold** sullo slot annullato (pod 1.0.13) |
+| 11:13:08 | arrivano `agenda` e `slots page=1/4` (risposta del Ledger a una richiesta di 6 minuti prima) |
+| 11:22:33 | `refused hold code=EXPIRED detail=slot ... has passed` |
+
+  Cause possibili, la correzione le copre entrambe: il rifiuto delle 11:06:57 riconsegnato al pod nuovo (la memoria della riprova era vuota e la cronologia mostrava solo il cancel dopo di esso), oppure il confirm ripetuto del cittadino su uno slot di cui la cronologia ha il cancel. Un caso simile: `…3760002` ha avuto cancel `reason=past` alle 11:13:41 e un hold sullo stesso slot alle 11:15:35.
+- **Offerte sostitutive dopo `cancel past`**: `…3760002` cancel 11:13:41, pagina 2 chiesta nello stesso secondo; `…3290006` cancel EXPIRED 11:05:23, pagina 2 alle 11:11:22, offerte al cittadino alle 11:18:17. Funzionano; il ritardo viene dal Ledger (5-6 minuti) e dal push (1-6 minuti).
+- **Caso con la ricerca di un CUP nello stesso `need_id`**: in `…3810002` l'`agent:yr8hjc5q7n98` ha mandato un `need.request` alle 11:09:34. Da quel momento `_family` mandava le risposte del Ledger solo alla ricerca e il desk del cittadino non completava mai le offerte sostitutive.
+- Correzione sul branch `hapca/consultorio-stato-dalla-cronologia` (`_reacted_since`, `_cancelled_for`, `_owed`, `_resume_owed`, riprova solo con un hold precedente): non pubblicata, aspetta l'OK al rilascio. Prova: `tools/test_consultorio_ledger_lento.py`, funzione `cambio_di_pod`.
+
 ## Verifica della 1.0.12 in sola lettura (21/11, messaggi fino alle 10:56 UTC)
 
 - **Tre `held` su tre dopo le 10:24 UTC finiscono in `STALE_FENCE` con il commit partito entro 2 s** (orari `sent_at`, UTC; il Ledger risponde `refused commit code=STALE_FENCE detail=the fence expired`):

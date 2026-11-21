@@ -1,5 +1,20 @@
 # Journal (la voce più recente in alto)
 
+## 2026-11-21 12:40 — Alberto (Hhapca, con Claude) — Consultorio 1.0.13 online; il cambio di pod lasciava un terzo hold, correzione pronta
+
+**Fatto**
+- **1.0.13 online dalle 11:07 UTC** (`dep-97eacecfb66a4d71b0284215d69fc756`, conformance PASS in 8,0 s) da `main` @ `46cd327`: dopo un `cancel reason=past` le offerte sostitutive partono da un solo punto (`_replace_offers`). Card 1.0.14 e registro in `main` (`f51b6b4`). Rollback: `city rollback agent:nkh372rd16yq --to 1.0.12`.
+- Letti in console i casi in volo al rilascio (messaggi fino alle 11:23 UTC, dettagli in `team/PROBLEMS.md`): `…3760002` ha avuto cancel `past` alle 11:13:41 e la pagina 2 chiesta nello stesso secondo; `…3290006` (cancel EXPIRED 11:05:23, pagina 2 alle 11:11:22) ha le offerte alle 11:18:17. Le offerte sostitutive ripartono, rallentate dal Ledger (5-6 minuti) e dal push (1-6 minuti).
+- Trovato in vivo il difetto che temevo nel cambio di pod: `…8909110003810002` ha avuto un **terzo hold alle 11:13:05** su uno slot di cui il cittadino aveva il cancel dalle 11:07:03 (rifiutato `EXPIRED` alle 11:22:33), e `…3760002` un hold alle 11:15:35 su uno slot annullato `past` alle 11:13:41. Correzione sul branch `hapca/consultorio-stato-dalla-cronologia`: rifiuti già gestiti, riprova unica e offerte sostitutive dovute si leggono dalla cronologia del caso, non dalla memoria del pod (voce in `team/DECISIONS.md`). Test nuovo `cambio_di_pod`: fallisce sul codice online (9 controlli), passa sul nuovo; 88 controlli nel file, 9 programmi di test verdi.
+
+**Problemi**
+- Non pubblicato: online c'è la 1.0.13 con il difetto del cambio di pod; la correzione aspetta l'OK al rilascio (1.0.14). Il rilascio stesso è un cambio di pod: con la nuova versione i casi in volo leggono lo stato dalla cronologia.
+- Resta il limite della piattaforma: Ledger a 5-6 minuti per richiesta, push al pod fino a 6 minuti, hold che scade in circa 2 minuti.
+- `…3810002` è un caso con la ricerca di un CUP (`agent:yr8hjc5q7n98`, 11:09:34) nello stesso `need_id`: le risposte del Ledger andavano solo alla ricerca, mai al desk del cittadino. Ora le completa `_resume_owed`.
+
+**Prossimo passo**
+- OK al rilascio di `hapca/consultorio-stato-dalla-cronologia`, poi controllare in console che dopo un cancel non compaia un hold nuovo sullo stesso slot e che le offerte sostitutive arrivino entro il push.
+
 ## 2026-11-21 12:05 — Alberto (Hhapca, con Claude) — Consultorio 1.0.12 verificato in sola lettura; correzione del ramo `past` pronta
 
 **Fatto**
