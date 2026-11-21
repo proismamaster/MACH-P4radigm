@@ -101,8 +101,29 @@ async def main(need: Need, city: City) -> None:
     text = message.text or need.summary
     if clinical(text):
         raise OutOfScope()
-    case = await city.history(need_id=message.need_id)
+    case = await _turn_history(city, message.need_id)
+    if case is None:
+        return  # no case data: never commit, report or send a receipt on a partial view
     await handle(role_of(), city, message, case)
+
+
+async def _turn_history(city: City, need_id: str | None) -> list[Message] | None:
+    """The case at the start of the turn. A 5xx (e.g. 504 UPSTREAM_TIMEOUT) is retried once after
+    a short pause, so a late held line still gets its commit in this turn (#107); a 4xx is not
+    retried; a second failure ends the turn without any effect."""
+    for attempt in range(2):
+        try:
+            return await city.history(need_id=need_id)
+        except CapError as error:
+            try:
+                transient = error.http_status() >= 500
+            except CapError:
+                transient = False
+            _LOG.warning("care.history.error need=%s code=%s attempt=%d", need_id, error.code, attempt + 1)
+            if not transient or attempt:
+                return None
+            await asyncio.sleep(_PULL_PAUSE)
+    return None
 
 
 def _asks_address(message: Message) -> bool:
