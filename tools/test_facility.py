@@ -44,6 +44,7 @@ def load(cap: str, aid: str):
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     mod._PULL_TRIES = 1  # niente attese: le risposte del Ledger arrivano al turno successivo
+    mod._WAIT_SECONDS = 0.0  # idem per l'attesa paziente del consultorio (hold, commit, prime offerte)
     return mod
 
 

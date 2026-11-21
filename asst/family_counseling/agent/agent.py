@@ -328,25 +328,44 @@ def _latest(chat: list[Message], head: str, token: str) -> Message | None:
     return found
 
 
+# Console 21/11 07:30-08:50 (a case alone on an idle pod): the Ledger answered 40-130 real seconds after each
+# request and the push of its reply opened our next turn 40-90 seconds later (held 08:20:49, commit sent
+# 08:22:23; 30 of 36 commits refused STALE_FENCE, every commit sent within 10 s of `held` went through).
+# The case history shows a reply as soon as the Relay accepts it, so a turn that has just asked the Ledger
+# keeps reading the case for up to _WAIT_SECONDS and goes on the moment the reply is there.
+_WAIT_SECONDS = 180.0
+_WAIT_STEP = 1.0
+
+
 async def _until(
     city: City,
     need_id: str | None,
     chat: list[Message],
     ready: Callable[[list[Message]], bool],
+    *,
+    patient: bool = False,
 ) -> list[Message]:
-    """Re-read the case until ``ready`` or the short wait ends. The push may never arrive."""
+    """Re-read the case until ``ready`` or the wait ends. The push may never arrive (or come late)."""
 
     fresh = chat
-    for attempt in range(_PULL_TRIES):
+    started, attempt = monotonic(), 0
+    while True:
         try:
             fresh = await city.history(need_id=need_id)
         except CapError:
             fresh = chat
         if ready(fresh):
             return fresh
-        if attempt + 1 < _PULL_TRIES:
+        attempt += 1
+        if patient:
+            elapsed = monotonic() - started
+            if elapsed >= _WAIT_SECONDS:
+                return fresh
+            await asyncio.sleep(_WAIT_STEP if elapsed < 30 else 2 * _WAIT_STEP)  # a read is a signed relay call
+        else:
+            if attempt >= _PULL_TRIES:
+                return fresh
             await asyncio.sleep(_PULL_PAUSE)
-    return fresh
 
 
 async def _await_line(
@@ -358,13 +377,15 @@ async def _await_line(
     *,
     op: str,
     skip: frozenset[str] = frozenset(),
+    patient: bool = False,
 ) -> tuple[Message, list[Message]] | None:
     """The ledger line for ``token``, or a refusal of ``op`` that was not already in ``chat``.
     Rows in ``skip`` (by msg_id) are ignored: a second hold must wait for ITS held line."""
 
     known = {row.msg_id for row in chat}
     fresh = chat
-    for attempt in range(_PULL_TRIES):
+    started, attempt = monotonic(), 0
+    while True:
         try:
             fresh = await city.history(need_id=need_id)
         except CapError:
@@ -377,9 +398,16 @@ async def _await_line(
                 continue
             if first_word(row.text) == "refused" and op in words(row.text):
                 return row, fresh
-        if attempt + 1 < _PULL_TRIES:
+        attempt += 1
+        if patient:
+            elapsed = monotonic() - started
+            if elapsed >= _WAIT_SECONDS:
+                return None
+            await asyncio.sleep(_WAIT_STEP if elapsed < 30 else 2 * _WAIT_STEP)
+        else:
+            if attempt >= _PULL_TRIES:
+                return None
             await asyncio.sleep(_PULL_PAUSE)
-    return None
 
 
 def _has_agenda(chat: list[Message]) -> bool:
@@ -731,6 +759,48 @@ def _sent(key: str) -> _Sent:
     return entry
 
 
+# Slots this process knows are not free. Console 21/11 07:30-08:50: five citizens were offered the same four
+# slots (the only valid ones on page 1); the first confirm held the first slot, the others got NO_CAPACITY a
+# hundred seconds later, and the replacement offers named the refused slot again (2560005, 3290003, 3200003).
+# This process holds every slot of its own facility, so it can remember what it learns about a slot.
+_GONE_FOR = {"held": 150.0, "full": 150.0, "past": 1e9, "booked": 1e9}  # real seconds
+_GONE: dict[str, tuple[float, str, str]] = {}  # slot_id -> (until, why, the case that holds it)
+_OFFERED: dict[str, float] = {}  # slot_id -> when it was last offered, to anyone
+_SPREAD_SECONDS = 150.0  # about the time a citizen takes to answer and the Ledger to hold
+
+
+def _mark_gone(slot: str, why: str, owner: str = "") -> None:
+    if slot:
+        _GONE[slot] = (monotonic() + _GONE_FOR[why], why, owner)
+
+
+def _release(slot: str, owner: str = "") -> None:
+    """The hold lapsed (the Ledger refused the commit): free again, unless booked or past."""
+
+    mark = _GONE.get(slot)
+    if mark and mark[1] in {"held", "full"} and mark[2] in {"", owner}:
+        del _GONE[slot]
+
+
+def _gone(besides: str = "") -> set[str]:
+    """Slots not free for this case: what other cases hold or booked, and every slot that has passed.
+    ``besides`` is the case itself: its own hold is not a reason to refuse its own confirm."""
+
+    now = monotonic()
+    for slot in [slot for slot, mark in _GONE.items() if mark[0] <= now]:
+        del _GONE[slot]
+    return {slot for slot, (_, why, owner) in _GONE.items() if not besides or owner != besides or why == "past"}
+
+
+def _spread(slots: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Slots nobody was offered in the last _SPREAD_SECONDS first: citizens take the first offer, so the same
+    first slot for all of them is a certain NO_CAPACITY for all but one."""
+
+    now = monotonic()
+    fresh = [s for s in slots if now - _OFFERED.get(s.get("slot_id", ""), -1e9) > _SPREAD_SECONDS]
+    return fresh + [s for s in slots if s not in fresh]
+
+
 async def _desk(
     city: City,
     message: Message,
@@ -803,12 +873,14 @@ async def _advance_alone(
             message.need_id,
             chat,
             lambda rows: _has_agenda(rows) and _latest_slots(rows) is not None,
+            patient=_pass == 0,
         )
     if now is None or world is None:
         return
     # A cancel drops every offer the citizen was holding, so the ones still free are sent again,
     # once per cancel: a second turn for the same cancel or refusal does not repeat them.
     sent = _sent(key)
+    refused = {item.removeprefix("refused:") for item in sent.offers if item.startswith("refused:")}
     if replacing:
         trigger = fields_of(message.text).get("offer_id") or message.msg_id
         if sent.trigger != trigger:
@@ -816,7 +888,13 @@ async def _advance_alone(
             sent.again = set()
         taken = _withdrawn(chat, agent) | sent.again
     else:
-        taken = _offered(chat, agent) | sent.offers
+        taken = _offered(chat, agent) | {item for item in sent.offers if not item.startswith("refused:")}
+        if taken and message.sender == LEDGER:
+            # A Ledger reply (agenda, slots) after our offers: each of them used to add three more.
+            return
+    # A slot the Ledger refused to this citizen, or that another case holds or booked, is never offered
+    # again: the cancel we have just sent is not in ``chat`` yet, so it cannot be read back from there.
+    excluded = taken | refused | _gone()
     chosen = [
         slot
         for slot in fitting(
@@ -828,18 +906,19 @@ async def _advance_alone(
             facility=agent if fixed == "CONS-GIN" else None,
             procedure=procedure,
         )
-        if slot.get("slot_id") not in taken
+        if slot.get("slot_id") not in excluded
     ]
     if chosen:
         # Every offer in ONE message: the citizen chooses in the turn of a single message (kit).
         # One message per offer left the citizen confirming the first one 18-34 minutes later,
         # already expired (journeys 256, 1970005).
-        picked = chosen[:3]
+        picked = _spread(chosen)[:3]
         lines = [_offer_line(slot, number, priority) for slot in picked]
         lines.append("Mi risponda con l'orario che preferisce; se nessuno le va bene, me lo dica e cerco altre date.")
         if await _say(city, citizen, "\n".join(lines)):
             for slot in picked:
                 sent.offers.add(slot["slot_id"])
+                _OFFERED[slot["slot_id"]] = monotonic()
                 if replacing:
                     sent.again.add(slot["slot_id"])
         return
@@ -921,6 +1000,19 @@ async def _confirm_once(
         if hold_self and message.sender.startswith("citizen:"):
             await _advance(city, message, chat, fixed="CONS-GIN", replacing=True)
         return
+    # The Ledger already refused this slot to this case, or another case of this process holds or booked
+    # it, or it has passed: a hold would only be refused again after a minute or two (NO_CAPACITY 2560005,
+    # 3290003 after 100 s) and the citizen repeats the confirm (07:41, 07:57, 08:13) into the silence.
+    # Answer now, with the next free slots, and only once per confirm.
+    key = message.need_id or message.msg_id
+    gone = _gone(besides=key)
+    if f"refused:{slot}" in _sent(key).offers or slot in gone:
+        if f"gone:{message.msg_id}" not in memory.offers:
+            memory.offers.add(f"gone:{message.msg_id}")
+            code = "EXPIRED" if _GONE.get(slot, (0, "", ""))[1] == "past" else "NO_CAPACITY"
+            await _recover(city, message, chat, slot, code, hold_self=hold_self,
+                           target=message.sender, offer_id=offer_id)
+        return
     citizen = fields.get("citizen") or (
         message.sender if message.sender.startswith("citizen:") else ""
     )
@@ -952,7 +1044,9 @@ async def _confirm_once(
             parts.append(f"prescription_number={number}")
         parts.append(f"consent_ref={hold_consent}")
         memory.offers.add(f"hold:{slot}")
+        _mark_gone(slot, "held", key)  # the other cases of this process stop offering it, now
         if not await _say(city, LEDGER, " ".join(parts)):
+            _release(slot, key)
             return
     await _finish_booking(city, message, chat, slot, hold_self=hold_self)
 
@@ -1091,8 +1185,10 @@ async def _finish_booking(
 ) -> None:
     """Hold is in the mailbox. Read the held line and commit before this turn ends."""
 
+    # Patient: the Ledger answers in 40-130 s and the push of its reply is 40-90 s later still, while a
+    # hold lasts about two minutes (STALE_FENCE). Read the case until the reply is there, commit at once.
     found = await _await_line(
-        city, message.need_id, chat, "held", f"slot_id={slot}", op="hold", skip=skip
+        city, message.need_id, chat, "held", f"slot_id={slot}", op="hold", skip=skip, patient=True
     )
     if found is None:
         _LOG.info("care.held.missing", extra={"need_id": (message.need_id or "")[:48]})
@@ -1106,7 +1202,8 @@ async def _finish_booking(
     if not hold_id:
         return
     done = await _await_line(
-        city, message.need_id, fresh, "committed", f"booking_id={hold_id}", op="commit", skip=skip
+        city, message.need_id, fresh, "committed", f"booking_id={hold_id}", op="commit", skip=skip,
+        patient=True,
     )
     if done is None:
         _LOG.info("care.commit.missing", extra={"need_id": (message.need_id or "")[:48]})
@@ -1127,6 +1224,7 @@ async def _on_held(city: City, message: Message, chat: list[Message]) -> None:
         _LOG.info("care.held.skip", extra={"head": first_word(message.text)[:40]})
         return
     memory = _sent(f"confirm:{message.need_id or message.msg_id}")
+    _mark_gone(slot, "held", message.need_id or message.msg_id)
     if f"commit:{hold_id}" in memory.offers or _our_commit(chat, city.agent_id, hold_id):
         return
     _, consent, number = _booking_of(chat, city.agent_id, slot)
@@ -1173,9 +1271,15 @@ async def _on_committed(city: City, message: Message, chat: list[Message]) -> No
     target = sender or _citizen(chat)
     if not target:
         return
+    _mark_gone(slot, "booked", message.need_id or message.msg_id)
     token = f"booking_id={booking_id}"
     if _we(chat, city.agent_id, token, to=target, word="booking.receipt"):
         return
+    # The turn that waited for the commit and the push of the same Ledger line can run together.
+    memory = _sent(f"confirm:{message.need_id or message.msg_id}")
+    if f"receipt:{booking_id}" in memory.offers:
+        return
+    memory.offers.add(f"receipt:{booking_id}")
     # Only after a successful commit. offer_id and slot_id let the booking centre match the
     # receipt to the confirm it sent (it compares them when present).
     parts = ["booking.receipt", token, f"ledger_ref={ledger_ref}"]
@@ -1184,7 +1288,8 @@ async def _on_committed(city: City, message: Message, chat: list[Message]) -> No
         if offer_id:
             parts.append(f"offer_id={offer_id}")
         parts.append(f"slot_id={slot}")
-    await _say(city, target, " ".join(parts))
+    if not await _say(city, target, " ".join(parts)):
+        memory.offers.discard(f"receipt:{booking_id}")
 
 
 def _confirmed_offer(chat: list[Message], agent: str, slot_id: str) -> str:
@@ -1217,7 +1322,6 @@ def _refusal_reason(text: str) -> str:
 # Level 8: the Ledger's own refusal, as the booking centre reads it. These three are a cancel with
 # the code in lower case; any other Ledger code is a hold_refused that names it.
 _CANCEL_CODES = {"prescription_expired", "consent_missing", "no_capacity"}
-_RETRY_CODES = {"EXPIRED", "STALE_FENCE"}
 
 
 def _refusal_line(reason: str, offer_id: str, slot: str, to_centre: bool) -> str:
@@ -1255,10 +1359,29 @@ async def _on_refused(
                 slot = fields_of(row.text).get("slot_id", slot)
     if not slot:
         return
-    # A hold that expired or carries an old fence (console 256, 229, 248): the citizen's confirm is
-    # still good, so hold and commit once more before cancelling. One retry per slot.
     memory = _sent(f"confirm:{message.need_id or message.msg_id}")
-    if _refusal_reason(message.text).upper() in _RETRY_CODES and f"retry:{slot}" not in memory.offers:
+    # The turn that waited for this refusal and the push that delivers it run together: once each.
+    if f"refusal:{message.msg_id}" in memory.offers:
+        return
+    memory.offers.add(f"refusal:{message.msg_id}")
+    reason = _refusal_reason(message.text)
+    code = reason.upper()
+    commit = "commit" in words(message.text)
+    owner = message.need_id or message.msg_id
+    # What the refusal tells every other case of this process (console 21/11: NO_CAPACITY on a slot another
+    # citizen held, EXPIRED "slot ... has passed"): it is not free, do not offer it again.
+    if commit:
+        _release(slot, owner)  # its hold lapsed
+    elif code == "NO_CAPACITY":
+        _mark_gone(slot, "full")
+    elif code == "EXPIRED":
+        _mark_gone(slot, "past", owner)
+    else:
+        _release(slot, owner)
+    # A commit refused for an old fence or an expired hold (console 256, 229, 248: the Ledger took longer
+    # than the lease): the citizen's confirm is still good, so hold and commit once more before cancelling.
+    # One retry per slot. EXPIRED on a hold is a slot that has passed: another hold cannot work.
+    if (code == "STALE_FENCE" or (code == "EXPIRED" and commit)) and f"retry:{slot}" not in memory.offers:
         prior = [
             row for row in chat
             if row.sender == agent and row.recipient == LEDGER and first_word(row.text) == "hold"
@@ -1266,17 +1389,41 @@ async def _on_refused(
         ]
         if prior:
             memory.offers.add(f"retry:{slot}")
+            _mark_gone(slot, "held", owner)
             if await _say(city, LEDGER, prior[-1].text):
                 known = frozenset(row.msg_id for row in chat)
                 await _finish_booking(city, message, chat, slot, hold_self=hold_self, skip=known)
                 return
+            _release(slot, owner)
     target, _, _ = _booking_of(chat, agent, slot)
-    offer_id = _confirmed_offer(chat, agent, slot)
+    await _recover(city, message, chat, slot, reason, hold_self=hold_self, target=target)
+
+
+async def _recover(
+    city: City,
+    message: Message,
+    chat: list[Message],
+    slot: str,
+    code: str,
+    *,
+    hold_self: bool,
+    target: str,
+    offer_id: str = "",
+) -> None:
+    """The slot is gone for this confirm: say so once, remember it, offer the next free slots.
+
+    The cancel we send is not in ``chat`` yet, so the slot is also kept in this case's memory
+    (``refused:``): the replacement offers used to name the refused slot again (2560005, 3290003)."""
+
+    agent = city.agent_id
+    _sent(message.need_id or message.msg_id).offers.add(f"refused:{slot}")
+    if not offer_id:
+        offer_id = _confirmed_offer(chat, agent, slot)
     if not offer_id:
         for row in chat:
             if f"slot_id={slot}" in row.text.split():
                 offer_id = fields_of(row.text).get("offer_id", offer_id)
-    line = _refusal_line(_refusal_reason(message.text), offer_id, slot, target.startswith("agent:"))
+    line = _refusal_line(code, offer_id, slot, target.startswith("agent:"))
     if (
         target
         and offer_id
@@ -1533,11 +1680,12 @@ def _facility_slots(
         earliest = now + _min_lead(priority)
     chosen: list[tuple[datetime, dict[str, str]]] = []
     reserved = 0
+    gone = _gone()  # held, booked or passed according to what this process has seen
     for line in lines:
         slot = fields_of(line)
         slot_id = slot.get("slot_id")
         at = _when(slot.get("at", "") or slot.get("agenda_date", ""))
-        if not slot_id or at is None:
+        if not slot_id or at is None or slot_id in gone:
             continue
         if slot.get("procedure") not in (None, procedure):
             continue
@@ -1689,8 +1837,10 @@ async def _answer_search(
     judged = [(slot, _violations(slot, criteria)) for slot in slots]
     valid = [slot for slot, broken in judged if not broken]
     if valid:
-        offers = [_partner_offer(slot, agent, priority, rid) for slot in valid[:3]]
-        await reply("\n".join(offers))
+        picked = _spread(valid)[:3]
+        await reply("\n".join(_partner_offer(slot, agent, priority, rid) for slot in picked))
+        for slot in picked:
+            _OFFERED[slot["slot_id"]] = monotonic()
         return
     page, pages = _page(world)
     if page < pages and page < _MAX_PAGE:

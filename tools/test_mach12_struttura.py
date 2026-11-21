@@ -503,7 +503,9 @@ async def anticipo_degli_slot() -> None:
     async def offered(now, rows):
         h = tf.Harness(CAP, ME, AgendaAt(ME, {f"{PROC}:1": tf.slots_reply(ME, rows)}, now))
         await h.turn(cit, "vorrei una visita ginecologica")
-        return [tokens(t).get("slot_id") for t in h.out(cit, "offer")], h
+        # Tutte le offerte di un giro sono in UN messaggio (una riga `offer` per slot, poi la frase).
+        return [tokens(line).get("slot_id") for t in h.out(cit, "offer")
+                for line in t.splitlines() if line.startswith("offer ")], h
 
     mon = "2026-11-23T08:00:00+01:00"  # lunedi' 08:00 d'agenda
     rows = [slot("N-3h", "2026-11-23T10:00:00.000Z", "mon"),   # 11:00 locali: 3 ore, mai
