@@ -114,14 +114,39 @@ async def main(need: Need, city: City) -> None:
                 await _say(city, message.sender, "escalate.emergency reason=red_flag")
             return
         async with _case_lock(message.need_id):
-            chat = await city.history(need_id=message.need_id)
+            chat = await _turn_history(city, message.need_id)
+            if chat is None:
+                # The case could not be read (5xx twice). An exception here ends the turn as "agent
+                # crashed": the harness acks the message as rejected and it never comes back. A red
+                # flag still gets its escalation; a prescription waits for a turn that can read the
+                # case (the citizen sends the same content again), never one made blind.
+                if urgent:
+                    await _gp(city, message, [message], urgent=True)
+                return
             if urgent:
                 await _gp(city, message, chat, urgent=True)
             else:
                 await handle(role, city, message, chat)
         return
-    case = await city.history(need_id=message.need_id)
-    await handle(role, city, message, case)
+    case = await _turn_history(city, message.need_id)
+    await handle(role, city, message, case if case is not None else [message])
+
+
+async def _turn_history(city: City, need_id: str | None) -> list[Message] | None:
+    """The case at the start of the turn: one more try on a 5xx (504 under load), else None."""
+    for attempt in range(3):
+        try:
+            return await city.history(need_id=need_id)
+        except CapError as error:
+            try:
+                retry = 500 <= error.http_status() < 600
+            except CapError:
+                retry = False
+            _LOG.warning("gp.history.failed need=%s code=%s attempt=%d", (need_id or "")[:48], error.code, attempt)
+            if not retry:
+                return None
+            await asyncio.sleep(_PULL_PAUSE)
+    return None
 
 
 def _asks_address(message: Message) -> bool:
@@ -278,6 +303,29 @@ async def _until(
             return fresh
         if attempt + 1 < polls:
             await asyncio.sleep(_PULL_PAUSE)
+    return fresh
+
+
+# The world reply is in the case history as soon as the Relay accepts it; the push that would open the
+# next turn comes 60-90 s later or not at all. Read it here, bounded by real time, like `prescribed`.
+_WORLD_WAIT = 180.0
+_WORLD_STEP = 1.0
+
+
+async def _gp_wait_world(city: City, need_id: str | None, chat: list[Message]) -> list[Message]:
+    fresh, errors, started, first = chat, 0, monotonic(), True
+    while first or monotonic() - started < _WORLD_WAIT:
+        first = False
+        try:
+            fresh = await city.history(need_id=need_id)
+            errors = 0
+        except CapError:
+            errors += 1
+            if errors >= 3:
+                break
+        if _gp_world_received(fresh):
+            return fresh
+        await asyncio.sleep(_WORLD_STEP if monotonic() - started < 30 else 2 * _WORLD_STEP)
     return fresh
 
 
@@ -569,7 +617,7 @@ async def _gp(city: City, message: Message, chat: list[Message], *, urgent: bool
 # would open our next turn comes 60-90 s later or not at all (405, 21/11 11:13 UTC: prescription on the
 # Ledger, never announced, the citizen never reached the CUP). After `prescribe` the turn reads the
 # history once a second for up to _RX_WAIT seconds (the hospital waits 180 s the same way).
-_RX_WAIT = 90.0
+_RX_WAIT = 420.0  # the Ledger answered in 208-217 s at 10:06 UTC (consultorio 1.0.11 waits 420 s too)
 _RX_STEP = 1.0
 
 
@@ -674,7 +722,7 @@ async def _gp_select_protocol(
     if not _gp_world_received(chat):
         if not _exact(chat, city.agent_id, "world") and not await _gp_send(city, message, LEDGER, "world"):
             return None
-        fresh = await _until(city, message.need_id, chat, _gp_world_received, max_polls=24)
+        fresh = await _gp_wait_world(city, message.need_id, chat)
         chat = _gp_case(fresh, message)
     if not _gp_world_received(chat):
         # Never prescribe before reading world: level 8 hides red flags in its protocol table. The
