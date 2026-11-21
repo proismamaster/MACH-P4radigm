@@ -1,6 +1,16 @@
 
 # Problemi
 
+## CAUSA CONFERMATA dei confirm senza ricevuta: lo slot e' gia' passato quando il cittadino decide (21/11 04:25)
+
+Un minuto reale e' un'ora d'agenda. Il cittadino risponde alle offerte dopo 3-20 minuti reali (nei dati: mediana ~176 s, p90 ~217 s, punte di 1116-1645 s), cioe' dopo 3-27 ORE d'agenda. Il CUP e le strutture offrono i primi slot disponibili (anticipo minimo 4 ore, e dopo la mia PR 1 ora): quando il cittadino conferma o rifiuta, lo slot e' gia' nel passato.
+
+Prova (consultorio 1.0.7, percorso 8909110001400007): primo messaggio del cittadino 02:47:55, prime offerte 02:55:05 (+430 s: slot di venerdi' 27 alle 10:30, 12:00, 14:30), `confirm` alle 03:15:19, `cancel reason=EXPIRED` del consultorio UN secondo dopo (il Ledger rifiuta l'hold di uno slot passato), poi tre offerte nuove; il cittadino le rifiuta alle 03:18 con `reason=past`.
+
+Spiega: i rifiuti `past` (24), gli `EXPIRED` del consultorio, buona parte dei `facility_cancelled` e il 97% di confirm senza ricevuta. NON spiega i 34 silenzi, ne' `STALE_FENCE`.
+
+**Correzione da fare** (non fatta): offrire slot ad almeno ~24 ore d'agenda (meglio 30) dall'ora dell'offerta, tenendo come minimo 4 ore; i posti vicini vanno in coda. Valori da cambiare: consultorio `_LEAD` e `fitting`/`_facility_slots`; CUP `_LEAD` (4 h -> 24+ h) e `_MIN_LEAD` (1 h -> 4 h). Entro le finestre B (2 giorni) e D (5 giorni) restano posti. Verificare in console `past` ed `EXPIRED` dopo il deploy.
+
 ## Confirm senza ricevuta e rifiuti dei cittadini (console 21/11 ~04:00 locali, 200 percorsi)
 
 Dati dal sito: `/v1/team/journeys` e `/v1/team/journeys/<need_id>`, con il login della squadra. Orari UTC.
