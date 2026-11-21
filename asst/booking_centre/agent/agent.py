@@ -145,7 +145,7 @@ def _cup_partner_candidates(found: list[str], service: str, local: set[str], lan
     ordered = dict.fromkeys([*speaker, *learned, *productive, *found, *known])
     return [agent for agent in ordered if agent not in local and _CUP_TOKEN.fullmatch(agent)][:_CUP_MAX_PARTNERS]
 
-_CUP_PARTNER_REPLY_SECONDS = 20
+_CUP_PARTNER_REPLY_SECONDS = 15
 _CUP_CONFIRM_WAIT = 180  # real seconds without receipt or cancel from the facility
 
 
@@ -1528,9 +1528,9 @@ async def _cup_cross_asst(
         days = _cup_days(chat, citizen)
         days_field = "/".join(day for day in _AGENDA_WEEKDAYS if day in days)
         language, gender = _lang(chat, citizen), _gender(chat, citizen)
-        # MACH-1.3: the asker sets the window with date and time; a 1.2 facility ignores these tokens.
+        # MACH-1.4 keeps the date and time window introduced in 1.3.
         until = _true_deadline(chat, citizen, priority)
-        window = f" mach=1.3 earliest={_utc(now + _min_lead(priority))}" + (f" deadline={_utc(until)}" if until else "")
+        window = f" mach=1.4 earliest={_utc(now + _min_lead(priority))}" + (f" deadline={_utc(until)}" if until else "")
         for partner in _cup_partner_candidates(found, service, local, language):
             request_id = f"rq-{token_hex(8)}"
             search = f"need.request service_type={service} procedure={procedure} priority={priority} request_id={request_id}"
@@ -1553,14 +1553,22 @@ async def _cup_cross_asst(
     offers, answered = collect(chat)
     # Only the turn that sent the searches waits for replies: every reply opens its own turn, and a
     # reply turn that polls holds the need's lock while the other replies queue behind it.
-    if started_here and searches.keys() - answered:
-        fresh = await _until(
-            city, message.need_id, chat,
-            lambda rows: not (searches.keys() - collect(rows)[1]), max_polls=6,
-        )
-        if fresh is None:
-            return
-        offers, answered = collect(fresh)
+    remaining = (_CUP_PARTNER_REPLY_SECONDS - (monotonic() - cache.partner_search_started)) if started_here else 0
+    if started_here and searches.keys() - answered and remaining > 0:
+        def received_all(rows: list[Message]) -> bool:
+            nonlocal offers, answered
+            if rows is not chat:
+                offers, answered = collect(rows)
+            return not (searches.keys() - answered)
+
+        try:
+            async with asyncio.timeout(remaining):
+                fresh = await _until(city, message.need_id, chat, received_all, max_polls=6)
+        except TimeoutError:
+            pass  # The next inbound reply can still supply a slot after the initial round.
+        else:
+            if fresh is None:
+                return  # A failed history read cannot be treated as a negative answer.
     for slot in offers:
         _PARTNER_GOOD.setdefault(service, {})[slot["facility"]] = None
     _LOG.warning(
