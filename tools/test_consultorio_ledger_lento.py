@@ -66,8 +66,10 @@ class Ledger(tf.World):
     EXPIRED, un commit con la fence scaduta e' STALE_FENCE."""
 
     def __init__(self, now="2026-12-14T18:00:35.254Z"):
-        super().__init__(ME, {f"{PROC}:1": tf.slots_reply(ME, PAGE1, "1/2"),
-                              f"{PROC}:2": tf.slots_reply(ME, PAGE2, "2/2")})
+        def page(rows, number):  # la riga di testa vera: wave_id e asst (le letture si condividono per ondata)
+            return tf.slots_reply(ME, rows, number).replace(
+                "slots page=", "slots wave_id=W01QQQ asst=asst-bicocca page=", 1)
+        super().__init__(ME, {f"{PROC}:1": page(PAGE1, "1/2"), f"{PROC}:2": page(PAGE2, "2/2")})
         self.now = now
         self.held: dict[str, str] = {}      # slot -> hold_id
         self.booked: set[str] = set()
@@ -500,6 +502,52 @@ async def rifiuti_del_relay() -> None:
     check("history in 504 al primo giro: nessun crash, le offerte partono", not crashed and len(offered(h, CIT_A)) == 3, h)
 
 
+# --- 8. Console 21/11 10:10-10:16 UTC, subito dopo la 1.0.10 ------------------------------------------------
+
+
+async def sostitutive_dopo_l_attesa() -> None:
+    print("Offerte sostitutive: la risposta del Ledger arriva dopo l'attesa e le completa il push (911000381)")
+    h = Arena(Ledger(), reads=2)
+    await open_case(h, N_A, CIT_A)  # A legge agenda e world: le letture condivise si riempiono
+    b = await open_case(h, N_B, CIT_B)  # B ha le offerte dalle letture condivise, senza chiedere al Ledger
+    check("B ha le sue tre offerte", len(b) == 3, h)
+    h.world.held[b[0]] = "bk-altro"
+    h.mod._SHARED.clear()  # le letture condivise durano 5 minuti: ora il caso deve chiedere di nuovo
+    h.reads, h.mod._WAIT_SECONDS = 10 ** 6, 0.05  # il Ledger risponde dopo l'attesa: lo porta il push
+    await confirm(h, N_B, CIT_B, b[0])
+    again = offered(h, CIT_B)[len(b):]
+    check("NO_CAPACITY, cache scaduta, risposta dopo l'attesa: il cancel e poi le offerte sostitutive",
+          len(cancels(h, CIT_B)) == 1 and bool(again), h)
+    check("... senza lo slot rifiutato e senza doppioni", b[0] not in again and len(again) == len(set(again)), h)
+    check("... in un solo messaggio, una volta sola", batches(h, CIT_B) == 2, h)
+
+
+def altro_pod(h: tf.Harness):
+    """Un secondo pod dello stesso agente (un rilascio): memoria vuota, stessa casella."""
+    mod = tf.load(CAP, ME)
+    mod._WAIT_SECONDS = 0.0
+
+    def deliver(message: tf.Message):
+        city = tf.City(index=tf.Index(), messages=h.port, history=h.port, agent_id=ME, inbound=message)
+        return mod.main(tf.Need(summary=message.text, message=message), city)
+
+    return deliver
+
+
+async def riprova_gia_in_corso() -> None:
+    print("Lo stesso rifiuto letto da un altro pod: la riprova c'e' gia' (003290005)")
+    h = make()
+    h.world.stale = 1
+    a = await open_case(h, N_A, CIT_A)
+    await confirm(h, N_A, CIT_A, a[0])
+    refusal = next(r for r in h.port.log if r.sender == tf.LEDGER and r.text.startswith("refused commit"))
+    holds, cancel_n, offer_n = len(h.out(tf.LEDGER, "hold")), len(cancels(h, CIT_A)), len(offered(h, CIT_A))
+    await altro_pod(h)(refusal)
+    check("il pod nuovo legge il rifiuto: nessun secondo hold (era gia' ripetuto dopo di esso), nessun cancel",
+          len(h.out(tf.LEDGER, "hold")) == holds and len(cancels(h, CIT_A)) == cancel_n
+          and len(offered(h, CIT_A)) == offer_n, h)
+
+
 def segni() -> None:
     print("Slot non liberi: scadenza e proprietario dei segni")
     h = make()
@@ -536,6 +584,8 @@ async def run() -> None:
     await due_cittadini()
     await ricerche_dei_cup()
     await rifiuti_del_relay()
+    await sostitutive_dopo_l_attesa()
+    await riprova_gia_in_corso()
     segni()
     print(f"\n{'TUTTO OK' if not tf.FAILS else str(len(tf.FAILS)) + ' FALLITE'}")
     sys.exit(1 if tf.FAILS else 0)

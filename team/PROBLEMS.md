@@ -1,6 +1,16 @@
 
 # Problemi
 
+## Primi percorsi della 1.0.10 e 1.0.11 (21/11 10:10-10:16 UTC): due difetti miei, uno slot che scade
+
+Fonte: i messaggi del consultorio (`/v1/team/agents/agent:nkh372rd16yq/messages`) subito dopo i rilasci delle 10:06 e delle 10:15.
+
+1. **Offerte sostitutive mai mandate (911000381).** NO_CAPACITY alle 10:04:53, cancel alle 10:07:39, agenda e world richiesti alle 10:07:40 (il pod nuovo non aveva letture condivise e il caso non ne ha di sue). Il Ledger risponde alle 10:11:21, 221 s dopo, a un'attesa ormai scaduta (180 s). Il turno del push di quella risposta trovava le offerte già mandate e, per il `return` che avevo messo ai push del Ledger dopo le prime offerte, non diceva niente: il cittadino resta senza offerte (5 minuti alle 10:16). **Correzione**: il cancel segna il caso con `replace:pending`; finché le offerte sostitutive non sono partite i turni dei push del Ledger le completano.
+2. **Due hold per lo stesso slot (003290005).** `refused commit STALE_FENCE` alle 10:10:50; hold di riprova alle 10:14:19 e un secondo alle 10:15:24, dal pod nuovo (rilascio delle 10:15) che rilegge lo stesso rifiuto senza averne memoria. Il secondo hold trova il primo e dà un falso NO_CAPACITY. **Correzione**: prima di riprovare si legge la cronologia: se dopo il rifiuto c'è già un nostro hold per lo slot, la riprova è in corso e non si fa niente.
+3. **Latenza del Ledger 199-221 s per richiesta** (agenda e world 10:06:09 → 10:09:37; 10:06:28 → 10:10:01; 10:07:40 → 10:11:21; un hold 10:10:52 → rifiuto 10:14:11), il push 60-200 s. Con 180 s l'attesa scadeva poco prima della risposta: portata a 420 s (1.0.11). A questa latenza nessun commit può stare nella durata di un hold (circa 2 minuti), anche partendo subito.
+4. **Gli slot scadono prima dell'hold.** Il caso 911000376 ha l'hold rifiutato `EXPIRED ... slot ...1030 has passed` alle 10:14:11: offerto con 10 ore d'agenda di anticipo, il giro offerta → conferma → hold dura ora 10-14 minuti reali = 10-14 ore d'agenda. L'anticipo minimo di 10 ore (`_MIN_LEAD`) non basta più per il consultorio ad accesso diretto (senza scadenza, 14 giorni d'orizzonte): da alzare a 16-20 ore, e meglio ricavarlo dalla latenza misurata. Non fatto: va in un rilascio a parte.
+5. **Codice nuovo `FACILITY_CANCELLED`** (`refused hold ... detail=the facility cancelled the first booking`, 911000382 alle 10:13:54; già visto alle 02:09 per 911000248): non capito. Il cittadino riceve `cancel reason=FACILITY_CANCELLED` e nuove offerte.
+
 ## Consultorio e latenza del Ledger: NO_CAPACITY, STALE_FENCE, tempi di hold e commit (21/11, dati 10:50 locali)
 
 Fonte: `/v1/team/agents/<id>/messages` (consultorio 1741 messaggi dal 20/11 22:30 UTC) e i percorsi `2560005` e `3290003`. Orari UTC. Lo strumento è `tools/misura_latenze.js` (si incolla nella console di `/team`; `await misura('agent:nkh372rd16yq')`).

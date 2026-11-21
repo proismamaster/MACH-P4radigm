@@ -1,6 +1,9 @@
 
 # Decisioni
 
+## 2026-11-21 11:20 — Offerte sostitutive in sospeso e riprova una sola volta anche tra pod
+Dopo un cancel le offerte sostitutive possono non partire nello stesso turno (il Ledger risponde dopo l'attesa): il caso resta segnato `replace:pending` e il primo turno con agenda e slots le manda, altrimenti il `return` ai push del Ledger (che evita un secondo giro di offerte a ogni risposta) lascerebbe il cittadino senza offerte. La riprova dopo `STALE_FENCE` controlla la cronologia: un nostro hold dopo il rifiuto significa che la riprova è già in corso, anche se l'ha fatta un altro pod (nel rilascio le due versioni leggono lo stesso rifiuto).
+
 ## 2026-11-21 11:00 — Il consultorio aspetta la risposta del Ledger nella cronologia, non nel push
 Il Ledger risponde in 40-130 s e il push della sua risposta apre il nostro turno 40-90 s dopo (pod fermo, un solo caso: `held` 08:20:49, commit 08:22:23); un hold regge circa due minuti e 27 commit su 36 sono finiti in `STALE_FENCE`. Dopo agenda/world, hold e commit il turno rilegge la cronologia (la risposta c'è appena il Relay l'accetta) fino a 420 s (180 s alla prima versione: alle 10:06-10:10 UTC il Ledger rispondeva in 208-217 s e l'attesa scadeva poco prima della risposta), ogni secondo per 30 s e poi ogni 2 s, e prosegue subito; scaduta l'attesa vale il push come prima. In cloud il brain gira dopo il `202` del push (`defer`) e un messaggio riconsegnato mentre gira non lo rilancia (`_hold_redelivery`), quindi un turno lungo non si duplica. Rischio accettato: più letture della cronologia (circa una al secondo per ogni attesa aperta). Prova: `tools/test_consultorio_ledger_lento.py`, classe `Arena`.
 

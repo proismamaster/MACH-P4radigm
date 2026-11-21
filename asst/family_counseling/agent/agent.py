@@ -840,6 +840,9 @@ def _gone(besides: str = "") -> set[str]:
     return {slot for slot, (_, why, owner) in _GONE.items() if not besides or owner != besides or why == "past"}
 
 
+_PENDING = "replace:pending"  # in a case's memory: the cancel is out, the replacement offers are not
+
+
 def _spread(slots: list[dict[str, str]]) -> list[dict[str, str]]:
     """Slots nobody was offered in the last _SPREAD_SECONDS first: citizens take the first offer, so the same
     first slot for all of them is a certain NO_CAPACITY for all but one."""
@@ -929,6 +932,9 @@ async def _advance_alone(
     # once per cancel: a second turn for the same cancel or refusal does not repeat them.
     sent = _sent(key)
     refused = {item.removeprefix("refused:") for item in sent.offers if item.startswith("refused:")}
+    # A replacement not sent yet (the Ledger answered after the wait of the turn that sent the cancel,
+    # console 911000381: five minutes without offers) is completed by the turn of that answer.
+    replacing = replacing or _PENDING in sent.offers
     if replacing:
         trigger = fields_of(message.text).get("offer_id") or message.msg_id
         if sent.trigger != trigger:
@@ -936,7 +942,9 @@ async def _advance_alone(
             sent.again = set()
         taken = _withdrawn(chat, agent) | sent.again
     else:
-        taken = _offered(chat, agent) | {item for item in sent.offers if not item.startswith("refused:")}
+        taken = _offered(chat, agent) | {
+            item for item in sent.offers if not item.startswith(("refused:", _PENDING))
+        }
         if taken and message.sender == LEDGER:
             # A Ledger reply (agenda, slots) after our offers: each of them used to add three more.
             return
@@ -964,6 +972,7 @@ async def _advance_alone(
         lines = [_offer_line(slot, number, priority) for slot in picked]
         lines.append("Mi risponda con l'orario che preferisce; se nessuno le va bene, me lo dica e cerco altre date.")
         if await _say(city, citizen, "\n".join(lines)):
+            sent.offers.discard(_PENDING)
             for slot in picked:
                 sent.offers.add(slot["slot_id"])
                 _OFFERED[slot["slot_id"]] = monotonic()
@@ -1213,6 +1222,20 @@ def _our_commit(chat: list[Message], agent: str, hold_id: str) -> bool:
     return False
 
 
+def _held_since(chat: list[Message], agent: str, slot: str, row: Message) -> bool:
+    """A hold of ours for ``slot`` after ``row`` in the case: the retry is already on its way."""
+
+    order = {item.msg_id: index for index, item in enumerate(chat)}
+    start = order.get(row.msg_id)
+    if start is None:
+        return False
+    return any(
+        item.sender == agent and item.recipient == LEDGER and first_word(item.text) == "hold"
+        and f"slot_id={slot}" in item.text.split()
+        for item in chat[start + 1:]
+    )
+
+
 def _latest_hold(chat: list[Message], agent: str) -> tuple[str, str | None]:
     consent = ""
     number: str | None = None
@@ -1423,6 +1446,10 @@ async def _on_refused(
     if f"refusal:{message.msg_id}" in memory.offers:
         return
     memory.offers.add(f"refusal:{message.msg_id}")
+    # Another pod (a release) has no memory of this refusal: its history shows whether a hold of ours for
+    # this slot already follows it (console 003290005: two retry holds for one STALE_FENCE).
+    if _held_since(chat, agent, slot, message):
+        return
     reason = _refusal_reason(message.text)
     code = reason.upper()
     commit = "commit" in words(message.text)
@@ -1495,6 +1522,7 @@ async def _recover(
     # The consultorio offers its next free slots again, but only to its own citizen: a confirm
     # that came from another booking centre goes back to that centre with the cancel above.
     if hold_self and target.startswith("citizen:"):
+        _sent(message.need_id or message.msg_id).offers.add(_PENDING)  # until the offers are really sent
         await _advance(city, message, chat, fixed="CONS-GIN", replacing=True)
 
 

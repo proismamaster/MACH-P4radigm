@@ -1,5 +1,20 @@
 # Journal (la voce più recente in alto)
 
+## 2026-11-21 11:22 — Alberto (Hhapca, con Claude) — Consultorio 1.0.11 online; due difetti miei trovati in console, correzione pronta
+
+**Fatto**
+- **1.0.11 online dalle 10:15 UTC** (`dep-651a9a35618441fbbb32234e36d9276f`, conformance PASS al primo tentativo in 10,3 s): attesa della risposta del Ledger fino a 420 s (era 180: il Ledger risponde in 199-221 s). `main` @ `9d2ae23`, card 1.0.12, riga nel registro dei rilasci.
+- Letti i primi percorsi dopo i rilasci (10:10-10:16 UTC): trovati e riprodotti con test (falliscono sul codice online) due difetti: (1) **offerte sostitutive mai mandate** quando la risposta del Ledger arriva dopo l'attesa: il `return` che avevo messo ai push del Ledger lascia il cittadino senza offerte (911000381, 5 minuti); (2) **due hold di riprova** per un solo `STALE_FENCE` quando il rifiuto lo legge anche il pod del rilascio (003290005): falso NO_CAPACITY sul secondo. Correzioni sul branch `hapca/consultorio-sostitutive` (`replace:pending`, `_held_since`), test 58 controlli verdi, 29 programmi verdi, card valida.
+
+**Problemi**
+- Non pubblicato: le correzioni sono sul branch, online c'è ancora la 1.0.11 con i due difetti.
+- Gli slot scadono prima dell'hold (911000376: `EXPIRED ... has passed` alle 10:14:11): il giro offerta → hold dura 10-14 minuti reali e l'anticipo minimo è 10 ore d'agenda. Da alzare a 16-20 ore per l'accesso diretto, meglio dalla latenza misurata: rilascio a parte.
+- A 199-221 s per richiesta del Ledger nessun commit sta nella durata di un hold (circa 2 minuti), anche partendo subito: finché la latenza non scende il collo di bottiglia non è il nostro codice.
+
+**Prossimo passo**
+- OK al rilascio di `hapca/consultorio-sostitutive` (1.0.12), poi rimisurare con `await misura('agent:nkh372rd16yq')`.
+- Poi l'anticipo minimo per l'accesso diretto.
+
 ## 2026-11-21 11:10 — Alberto (Hhapca, con Claude) — Consultorio 1.0.10 online (NO_CAPACITY, STALE_FENCE, attesa del Ledger)
 
 **Fatto**
