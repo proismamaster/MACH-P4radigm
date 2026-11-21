@@ -600,7 +600,7 @@ class _Sent:
         self.offers: set[str] = set()
         self.trigger = ""
         self.again: set[str] = set()
-        self.outbox: deque[Message] = deque(maxlen=16)
+        self.outbox: deque[tuple[Message, str]] = deque(maxlen=16)
         self.uncertain_confirmation = False
         self.partner_search_started: float | None = None
         # Ledger agenda/slots answers read before a P1 renewal: stale once the renewal is asked.
@@ -643,6 +643,7 @@ async def _case_lock(key: str) -> AsyncIterator[None]:
 @dataclass
 class _CupCase:
     offers: dict[str, dict[str, str]] = field(default_factory=dict)
+    declined_slots: set[str] = field(default_factory=set)
     cross_consent_request: Message | None = None
     confirmation: Message | None = None
     cancellation: Message | None = None
@@ -654,10 +655,18 @@ class _CupCase:
 def _cup_case(chat: list[Message], agent: str, citizen: str) -> _CupCase:
     state = _CupCase()
     for row in chat:
-        if row.sender == citizen and "cancel" in words(row.text):
-            # The citizen declines an offer (e.g. reason=deadline): it is no longer open, so once
-            # every offer is declined the case moves on instead of waiting in silence (165, 166).
-            state.offers.pop(fields_of(row.text).get("offer_id", ""), None)
+        if row.sender == citizen:
+            act, fields = _cup_input(row)
+            offer_id = fields.get("offer_id", "")
+            declined = state.offers.pop(offer_id, None) if act == "cancel" else None
+            if declined is not None:
+                if slot := declined.get("slot_id"):
+                    state.declined_slots.add(slot)
+                ask = state.cross_consent_request
+                if ask is not None and fields_of(ask.text).get("offer_id") == offer_id:
+                    state.cross_consent_request = None
+                if not state.offers:
+                    state.cancellation = row
             continue
         if row.sender != agent:
             continue
@@ -688,7 +697,8 @@ def _cup_case(chat: list[Message], agent: str, citizen: str) -> _CupCase:
                     state.cancellation = None
                     state.renewal_request = row
             elif act == "consent" and fields.get("purpose") == "cross_asst":
-                state.cross_consent_request = row
+                if fields.get("offer_id") in state.offers:
+                    state.cross_consent_request = row
             elif act == "booking.receipt" and fields.get("booking_id") and fields.get("ledger_ref"):
                 state.booked = True
         elif act == "confirm" and fields.get("citizen") == citizen and row.recipient.startswith("agent:"):
@@ -719,10 +729,11 @@ def _cup_input(message: Message) -> tuple[str, dict[str, str]]:
 
 async def _cup_post(city: City, inbound: Message, cache: _Sent, to: str, text: str) -> None:
     msg_id = await city.say(to, text)
-    cache.outbox.append(Message(
+    sent = Message(
         type="chat", sender=city.agent_id, msg_id=msg_id, recipient=to,
         need_id=inbound.need_id, conversation_id=inbound.conversation_id, body={"text": text},
-    ))
+    )
+    cache.outbox.append((sent, inbound.msg_id))
 
 
 async def _cup_send(city: City, inbound: Message, cache: _Sent, to: str, text: str) -> bool:
@@ -736,13 +747,24 @@ async def _cup_send(city: City, inbound: Message, cache: _Sent, to: str, text: s
 def _cup_history(chat: list[Message], cache: _Sent, agent: str, need_id: str) -> list[Message]:
     # A Ledger or facility response may use another conversation within the same need.
     case = [row for row in chat if row.need_id == need_id and agent in (row.sender, row.recipient)]
-    persisted = {row.msg_id: row for row in case}
-    cached = {row.msg_id for row in cache.outbox}
-    # Keep sent messages in send order even if the Relay has stored only some of them.
-    return [
-        *(row for row in case if row.msg_id not in cached),
-        *(persisted.get(row.msg_id, row) for row in cache.outbox),
-    ]
+    positions = {row.msg_id: index for index, row in enumerate(case, 1)}
+    missing: dict[int, list[Message]] = {}
+    after = 0
+    # Keep the Relay's oldest-first history. Insert missing sends after their trigger
+    # and the preceding send, preserving send order when both have the same position.
+    for row, trigger in cache.outbox:
+        if row.msg_id in positions:
+            after = positions[row.msg_id]
+        else:
+            after = max(after, positions.get(trigger, 0))
+            missing.setdefault(after, []).append(row)
+    if not missing:
+        return case
+    merged = list(missing.get(0, ()))
+    for index, row in enumerate(case, 1):
+        merged.append(row)
+        merged.extend(missing.get(index, ()))
+    return merged
 
 
 async def _booking_centre(city: City, message: Message, chat: list[Message]) -> None:
@@ -891,8 +913,8 @@ async def _cup_cross_consent(
     offer_id = fields_of(ask.text).get("offer_id", "")
     if offer_id not in state.offers or fields.get("offer_id", offer_id) != offer_id:
         return
-    if act in {"", "confirm"}:
-        return  # The original booking confirmation may be delivered again.
+    if act in {"", "confirm"} or (act == "cancel" and "offer_id" in fields):
+        return  # Booking confirmations and slot declines are separate from consent.
     if fields.get("purpose") not in (None, "cross_asst"):
         return
     received_at, asked_at = _when(message.sent_at), _when(ask.sent_at)
@@ -930,7 +952,7 @@ async def _cup_cancel(
 ) -> None:
     if await _cup_send(city, message, cache, citizen, notice):
         cache.uncertain_confirmation = False
-        cancellation = cache.outbox[-1]
+        cancellation, _ = cache.outbox[-1]
         await _advance_alone(
             city, cancellation, [*chat, cancellation], message.need_id or message.msg_id,
             replacing=True,
@@ -1265,7 +1287,7 @@ async def _advance_alone(
         if sent.trigger != trigger:
             sent.trigger = trigger
             sent.again = set()
-        taken = _withdrawn(chat, agent) | sent.again
+        taken = _withdrawn(chat, agent) | case.declined_slots | sent.again
     else:
         taken = _offered(chat, agent) | sent.offers
     chosen = [
