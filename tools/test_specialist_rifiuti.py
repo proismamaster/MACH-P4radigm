@@ -84,5 +84,16 @@ asyncio.run(mod._facility(city, row, [*CHAT, row], reports=True, hold_self=False
 out = [t for to, t in city.sent if to == CUP]
 check("ricevuta al CUP con slot_id e offer_id", out and "slot_id=S-OLD" in out[0] and "offer_id=of-OLD" in out[0])
 
+print("Specialist - ricevuta al cittadino senza slot_id")
+cchat = [
+    msg(11, CIT, ME, "confirm offer_id=of-C slot_id=S-C consent_ref=cx-2"),
+    msg(12, ME, LEDGER, f"hold slot_id=S-C citizen={CIT} consent_ref=cx-2"),
+    msg(13, ME, CIT, "booking.receipt booking_id=bk-9 ledger_ref=L-9"),
+]
+city = FakeCity()
+row = msg(19, LEDGER, ME, "refused hold slot_id=S-C code=NO_CAPACITY")
+asyncio.run(mod._facility(city, row, [*cchat, row], reports=True, hold_self=False))
+check("rifiuto tardivo dopo la ricevuta al cittadino: nessun annullamento", not [t for to, t in city.sent if to == CIT])
+
 print("FALLITE:", FAILS if FAILS else "nessuna")
 sys.exit(1 if FAILS else 0)
