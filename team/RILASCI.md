@@ -13,14 +13,14 @@ Chi rilascia aggiunge la riga **subito dopo** `city deploy` / `city rollback`, n
 
 ## Online ora
 
-Controllato con `city --json status` alle 09:38 UTC.
+Controllato con `city --json status` alle 10:48 UTC.
 
 | Agente | ID | Versione | Dalle (UTC) | Deployment | Rollback a |
 |---|---|---|---|---|---|
 | gp | `agent:rng5wcrzvhsj` | 1.0.5 | 07:29 | — | 1.0.4 |
-| booking_centre | `agent:ez8cb7j167p2` | 1.0.24 | 09:29 | `dep-3795422a70e544839eba398c31bd7b94` | 1.0.23 |
-| hospital | `agent:bb01ggxymm05` | 1.0.6 | 09:26 | `dep-23e98e1ab0cb4e15ab67505ee0c87a17` | 1.0.5 (o 1.0.4, prima di MACH-1.3) |
-| specialist | `agent:sh35cbsy287d` | 1.0.5 | 09:33 | `dep-b977d25f34314a5fb64120260501ff21` | 1.0.4 |
+| booking_centre | `agent:ez8cb7j167p2` | 1.0.25 | 10:45 | `dep-a6068797fa384615b5a08394f110fb2b` | 1.0.24 |
+| hospital | `agent:bb01ggxymm05` | 1.0.7 | 10:47 | `dep-bbe98f223dff429490fb412e3eaa7e39` | 1.0.6 |
+| specialist | `agent:sh35cbsy287d` | 1.0.7 | 10:09 | `dep-e266d81085594c5eadcb63e840d30232` | 1.0.6 |
 | family_counseling | `agent:nkh372rd16yq` | 1.0.12 | 10:24 | `dep-51f2bf67c40040fe84dc12ce18fca974` | 1.0.11 (le versioni 1.0.10 e 1.0.11 hanno i due difetti della riga 10:24) |
 
 ## Registro
@@ -53,5 +53,7 @@ Controllato con `city --json status` alle 09:38 UTC.
 | 21/11 10:06 | family_counseling | 1.0.10 | deploy (Alberto/Sonnet) | `dep-1db21a807504496bb2027b563b9ceab3` | `c9d1b28` | NO_CAPACITY e STALE_FENCE (`fb886bb`, `252d91d`): attesa della risposta del Ledger nella cronologia (fino a 180 s), slot rifiutato, tenuto, prenotato o passato mai riproposto, `EXPIRED` sull'hold non si riprova, rifiuti immediati del Relay e `history` in 504 gestiti, un solo giro di offerte. Conformance PASS al secondo tentativo (43,6 s). |
 | 21/11 10:15 | family_counseling | 1.0.11 | deploy (Alberto/Sonnet) | `dep-651a9a35618441fbbb32234e36d9276f` | `f5451c1` | attesa della risposta del Ledger fino a 420 s (era 180): alle 10:06-10:10 il Ledger rispondeva in 208-217 s e l'attesa scadeva poco prima della risposta. Conformance PASS al primo tentativo (10,3 s). Rispetto alla 1.0.10 cambia solo questo. |
 | 21/11 10:24 | family_counseling | 1.0.12 | deploy (Alberto/Sonnet) | `dep-51f2bf67c40040fe84dc12ce18fca974` | `f3f5f9f` | due difetti della 1.0.10/1.0.11 trovati nei primi percorsi: offerte sostitutive mai mandate quando il Ledger risponde dopo l'attesa (911000381, `replace:pending`) e due hold di riprova per un solo `STALE_FENCE` tra due pod (003290005, `_held_since`) (`7344846`). Include la Prova O di `tools/test_facility.py` e l'attesa paziente dell'ospedale (#113, non ancora online). Conformance PASS al primo tentativo (4,9 s). |
+| 21/11 10:45 | booking_centre | 1.0.25 | deploy (Andrei) | `dep-a6068797fa384615b5a08394f110fb2b` | `3150c17` | PR unica #116 (Abed) con #106 timeout di history, #109 nuova ricerca per lingua rara, #112 MACH-1.4, #114 contesa sugli slot tra pratiche e finestre impossibili, #115 fino a cinque offerte varie. Review di Andrei: 28 suite verdi, card valida. **Senza** il filtro impostori (#86, in review separata). Conformance PASS (18,3 s). |
+| 21/11 10:47 | hospital | 1.0.7 | deploy (Andrei) | `dep-bbe98f223dff429490fb412e3eaa7e39` | `3150c17` | attesa paziente di `held` e `committed` nel turno del confirm (fino a 180 s), slot tenuti/prenotati/passati segnati per il processo con cancel `no_capacity` immediato, nuovo hold dopo un rifiuto (#113). 82 s dopo il CUP 1.0.25. Conformance PASS (39,1 s). |
 
 Commit: per le righe fino alle 07:29 è il commit del bump della card (il codice rilasciato è quello del suo genitore su `main`); dalle prossime, lo SHA di `main` rilasciato. Le righe con «—» sono ricostruite dai commit: chi ha fatto quei deploy può completare il deployment.
