@@ -12,7 +12,7 @@ import os
 import sys
 import unittest
 from dataclasses import replace
-from itertools import count
+from itertools import chain, count, repeat
 from pathlib import Path
 from unittest.mock import patch
 
@@ -189,9 +189,64 @@ class CupRecoveryTests(unittest.IsolatedAsyncioTestCase):
         cls.brain = load_brain()
 
     async def asyncSetUp(self):
+        self.brain._CUP_RECENT_OFFERS.clear()
         role = patch.dict(os.environ, {"CITY_ROLE": "booking_centre"})
         role.start()
         self.addCleanup(role.stop)
+
+    async def test_history_timeout_recovers_confirmation_without_repeating_it(self):
+        case = Case(self.brain, "history-transient-confirm")
+        await case.open(local_free=1)
+        offer_id = case.choices()[0]["offer_id"]
+        confirmation = case.add(CITIZEN, f"confirm offer_id={offer_id} consent_ref=cons-42-booking")
+
+        for _ in range(2):
+            # The next turn may run in a process whose outbox never saw the offer or the confirm.
+            self.brain._SENT.pop(case.need_id, None)
+            rows = await case.history(peer=None, need_id=case.need_id)
+            with patch.object(case, "history", side_effect=[CapError("UPSTREAM_TIMEOUT", "relay history"), rows]) as read:
+                await case.turn(confirmation)
+            self.assertEqual(read.await_count, 2)
+            self.assertEqual(len(case.out(HOSPITAL, "confirm")), 1)
+            self.assertEqual(case.out(CITIZEN, "booking.receipt"), [])
+
+    async def test_history_failure_closes_turn_without_booking_or_extra_retries(self):
+        for code, allowed_reads in (("UPSTREAM_TIMEOUT", 2), ("GRANT_PERMISSION_DENIED", 1)):
+            with self.subTest(code=code):
+                case = Case(self.brain, f"history-failed-confirm-{code}")
+                await case.open(local_free=1)
+                offer_id = case.choices()[0]["offer_id"]
+                confirmation = case.add(CITIZEN, f"confirm offer_id={offer_id} consent_ref=cons-42-booking")
+                mark = len(case.sent)
+                with patch.object(case, "history", side_effect=CapError(code, "relay history")) as read:
+                    await case.turn(confirmation)
+                self.assertEqual(read.await_count, allowed_reads)
+                self.assertEqual(case.sent[mark:], [], "An unreadable case cannot authorize a booking or a receipt")
+
+                await case.turn(confirmation)
+                self.assertEqual(len(case.out(HOSPITAL, "confirm")), 1)
+
+    async def test_history_4xx_ends_ledger_poll_in_same_turn(self):
+        case = Case(self.brain, "history-forbidden-in-poll")
+        request = case.add(CITIZEN, f"need.request prescription_number={OLD_RX} lang=it")
+        reads = chain([[request]], repeat(CapError("GRANT_PERMISSION_DENIED", "relay history")))
+        with patch.object(case, "history", side_effect=reads) as read:
+            await case.turn(request)
+        self.assertEqual(read.await_count, 2, "Stop polling when the Relay rejects access")
+        self.assertEqual(len(case.out(LEDGER, "prescription")), 1)
+        self.assertEqual(case.out(CITIZEN, "offer"), [])
+
+    async def test_history_poll_timeout_retains_the_last_successful_read(self):
+        case = Case(self.brain, "history-poll-transient")
+        request = case.add(CITIZEN, f"need.request prescription_number={OLD_RX} lang=it")
+        agenda = case.add(LEDGER, "agenda agenda_now=2026-11-23T07:00:00+01:00", conversation="ledger")
+        city = City(index=case, messages=case, history=case, agent_id=CUP, inbound=request)
+        with patch.object(case, "history", side_effect=[
+            [request, agenda], CapError("UPSTREAM_TIMEOUT", "relay history"),
+        ]) as read:
+            rows = await self.brain._until(city, case.need_id, [request], lambda rows: False, max_polls=2)
+        self.assertEqual(read.await_count, 2)
+        self.assertEqual(rows, [request, agenda])
 
     async def test_post_receipt_cancellation_ignores_unrelated_or_conflicting_events(self):
         for index, (sender, template) in enumerate((

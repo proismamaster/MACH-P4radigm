@@ -107,6 +107,7 @@ def doctor(block):
     return block["doctor_id"].rsplit("-", 1)[-1]
 
 
+@patch.object(cup, "_CUP_OFFERS_PER_BATCH", 3)
 class FlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_named_days_limit_the_offers(self):
         box = Run("named", "D", SLOTS)

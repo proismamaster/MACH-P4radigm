@@ -145,8 +145,10 @@ def _cup_partner_candidates(found: list[str], service: str, local: set[str], lan
     ordered = dict.fromkeys([*speaker, *learned, *productive, *found, *known])
     return [agent for agent in ordered if agent not in local and _CUP_TOKEN.fullmatch(agent)][:_CUP_MAX_PARTNERS]
 
-_CUP_PARTNER_REPLY_SECONDS = 20
+_CUP_PARTNER_REPLY_SECONDS = 15
 _CUP_CONFIRM_WAIT = 180  # real seconds without receipt or cancel from the facility
+_CUP_OFFER_SPREAD_SECONDS = 150
+_CUP_RECENT_OFFERS: OrderedDict[tuple[str, str], tuple[str, float, bool]] = OrderedDict()
 
 
 def role_of() -> str:
@@ -177,11 +179,12 @@ async def main(need: Need, city: City) -> None:
         if not message.need_id:
             return
         async with _case_lock(message.need_id):
-            chat = await city.history(need_id=message.need_id)
-            await handle(role, city, message, chat)
+            chat = await _load_case_history(city, message.need_id)
+            if chat is not None:
+                await handle(role, city, message, chat)
         return
-    case = await city.history(need_id=message.need_id)
-    await handle(role, city, message, case)
+    # With no CUP role, handle only serves the stateless address inquiry.
+    await handle(role, city, message, [])
 
 
 def _asks_address(message: Message) -> bool:
@@ -337,6 +340,26 @@ def _exact(chat: list[Message], agent: str, text: str) -> bool:
     return any(row.sender == agent and row.text.strip() == text for row in chat)
 
 
+def _history_can_retry(error: CapError) -> bool:
+    try:
+        return 500 <= error.http_status() < 600
+    except CapError:
+        return False  # An unknown CAP code does not authorize a retry.
+
+
+async def _load_case_history(city: City, need_id: str) -> list[Message] | None:
+    """Load the authoritative case before processing an inbound message."""
+
+    for attempt in range(2):
+        try:
+            return await city.history(need_id=need_id)
+        except CapError as error:
+            if attempt or not _history_can_retry(error):
+                _LOG.warning("cup.history.failed need=%s code=%s", need_id, error.code)
+                break
+    return None
+
+
 async def _until(
     city: City,
     need_id: str | None,
@@ -344,18 +367,26 @@ async def _until(
     ready: Callable[[list[Message]], bool],
     *,
     max_polls: int | None = None,
-) -> list[Message]:
+) -> list[Message] | None:
     """Re-read the case until ``ready`` or the short wait ends. The push may never arrive."""
 
+    if not need_id:
+        return None
     fresh = chat
+    previous_failed = False
     polls = _PULL_TRIES if max_polls is None else min(max_polls, _PULL_TRIES)
     for attempt in range(polls):
         try:
             fresh = await city.history(need_id=need_id)
-        except CapError:
-            fresh = chat
-        if ready(fresh):
-            return fresh
+        except CapError as error:
+            if previous_failed or not _history_can_retry(error):
+                _LOG.warning("cup.history.failed need=%s code=%s", need_id, error.code)
+                return None
+            previous_failed = True
+        else:
+            previous_failed = False
+            if ready(fresh):
+                return fresh
         if attempt + 1 < polls:
             await asyncio.sleep(_PULL_PAUSE)
     return fresh
@@ -831,7 +862,7 @@ class _Sent:
 
     __slots__ = (
         "offers", "trigger", "again", "outbox", "uncertain_confirmation", "partner_search_started", "stale_reads",
-        "paging_started", "confirm_sent_at", "confirm_resent",
+        "partner_search_retried", "paging_started", "confirm_sent_at", "confirm_resent",
     )
 
     def __init__(self) -> None:
@@ -841,6 +872,7 @@ class _Sent:
         self.outbox: deque[tuple[Message, str]] = deque(maxlen=16)
         self.uncertain_confirmation = False
         self.partner_search_started: float | None = None
+        self.partner_search_retried = False
         # Ledger agenda/slots answers read before a P1 renewal: stale once the renewal is asked.
         self.stale_reads: set[str] = set()
         self.paging_started: float | None = None
@@ -1350,6 +1382,14 @@ def _cup_withdrawal(chat: list[Message], offers: dict[str, dict[str, str]]) -> s
     return None
 
 
+def _cup_partner_horizon(now: datetime, priority: str, until: datetime | None) -> datetime:
+    if priority == "U":
+        horizon = now.replace(hour=23, minute=59, second=59, microsecond=0)
+    else:
+        horizon = _agenda_horizon(now, _DEADLINE_DAYS[priority])
+    return min(horizon, until) if until is not None else horizon
+
+
 def _cup_partner_slots(
     chat: list[Message], searches: dict[str, str], procedure: str, priority: str, now: datetime,
     citizen: str, taken: set[str],
@@ -1357,12 +1397,7 @@ def _cup_partner_slots(
     slots: dict[tuple[str, str], dict[str, str]] = {}
     answered = set()
     days, language, gender = _cup_days(chat, citizen), _lang(chat, citizen), _gender(chat, citizen)
-    if priority == "U":
-        horizon = now.replace(hour=23, minute=59, second=59, microsecond=0)
-    else:
-        horizon = _agenda_horizon(now, _DEADLINE_DAYS[priority])
-    if (until := _true_deadline(chat, citizen, priority)) is not None:
-        horizon = min(horizon, until)
+    horizon = _cup_partner_horizon(now, priority, _true_deadline(chat, citizen, priority))
     earliest = now + _min_lead(priority)
     for row in chat:
         request_id = searches.get(row.sender)
@@ -1452,8 +1487,37 @@ async def _cup_cross_asst(
     *, replacing: bool, relaxed: list[dict[str, str]] | None = None,
 ) -> None:
     service = _CUP_SERVICES[procedure]
-    searches = _cup_searches(chat, city.agent_id)
-    started_here = not searches and cache.partner_search_started is None
+    earliest = now + _min_lead(priority)
+    until = _true_deadline(chat, citizen, priority)
+    window_open = earliest < _cup_partner_horizon(now, priority, until)
+    agent = city.agent_id
+    first_notice = _no_slots_text("", "no_slots")
+    retry_notice = _no_slots_text("", "no_slots", rechecked=True)
+    after_notice = next((chat[index + 1:] for index, row in enumerate(chat)
+                         if row.sender == agent and row.recipient == citizen and row.text.endswith(first_notice)), None)
+    new_searches = _cup_searches(after_notice or [], agent)
+    rechecked = cache.partner_search_retried or bool(new_searches) or any(
+        row.sender == agent and row.recipient == citizen and row.text.endswith(retry_notice)
+        for row in after_notice or []
+    )
+    # Rare-language requests can depend on one partner: retry once when the citizen returns
+    # after the no-slots notice. The notice separates rounds, and offers keep their request IDs.
+    inbound = getattr(city, "inbound", None)
+    retry_fields = _cup_input(inbound)[1] if inbound is not None and inbound.sender == citizen else {}
+    retry_language = retry_fields.get("lang", "").lower()
+    retry_here = (
+        window_open and not rechecked and after_notice is not None and inbound is not None
+        and retry_language not in {"", "it", "en"} and _CUP_TOKEN.fullmatch(retry_language)
+        and (inbound.type == "need.request" or "need.request" in words(inbound.text))
+        and retry_fields.get("prescription_number") == number
+        and any(row.msg_id == inbound.msg_id for row in after_notice)
+    )
+    if retry_here:
+        cache.partner_search_retried = rechecked = True
+    searches = new_searches if rechecked else _cup_searches(chat, agent)
+    started_here = retry_here or (
+        window_open and after_notice is None and not searches and cache.partner_search_started is None
+    )
     if started_here:
         cache.partner_search_started = monotonic()
         try:
@@ -1474,9 +1538,8 @@ async def _cup_cross_asst(
         days = _cup_days(chat, citizen)
         days_field = "/".join(day for day in _AGENDA_WEEKDAYS if day in days)
         language, gender = _lang(chat, citizen), _gender(chat, citizen)
-        # MACH-1.3: the asker sets the window with date and time; a 1.2 facility ignores these tokens.
-        until = _true_deadline(chat, citizen, priority)
-        window = f" mach=1.3 earliest={_utc(now + _min_lead(priority))}" + (f" deadline={_utc(until)}" if until else "")
+        # MACH-1.4 keeps the date and time window introduced in 1.3.
+        window = f" mach=1.4 earliest={_utc(earliest)}" + (f" deadline={_utc(until)}" if until else "")
         for partner in _cup_partner_candidates(found, service, local, language):
             request_id = f"rq-{token_hex(8)}"
             search = f"need.request service_type={service} procedure={procedure} priority={priority} request_id={request_id}"
@@ -1489,7 +1552,7 @@ async def _cup_cross_asst(
             search += window
             if await _cup_send(city, message, cache, partner, search):
                 searches[partner] = request_id
-    elif cache.partner_search_started is None:
+    elif searches and cache.partner_search_started is None:
         cache.partner_search_started = monotonic()
 
     def collect(rows: list[Message]) -> tuple[list[dict[str, str]], set[str]]:
@@ -1499,12 +1562,22 @@ async def _cup_cross_asst(
     offers, answered = collect(chat)
     # Only the turn that sent the searches waits for replies: every reply opens its own turn, and a
     # reply turn that polls holds the need's lock while the other replies queue behind it.
-    if started_here and searches.keys() - answered:
-        fresh = await _until(
-            city, message.need_id, chat,
-            lambda rows: not (searches.keys() - collect(rows)[1]), max_polls=6,
-        )
-        offers, answered = collect(fresh)
+    remaining = (_CUP_PARTNER_REPLY_SECONDS - (monotonic() - cache.partner_search_started)) if started_here else 0
+    if started_here and searches.keys() - answered and remaining > 0:
+        def received_all(rows: list[Message]) -> bool:
+            nonlocal offers, answered
+            if rows is not chat:
+                offers, answered = collect(rows)
+            return not (searches.keys() - answered)
+
+        try:
+            async with asyncio.timeout(remaining):
+                fresh = await _until(city, message.need_id, chat, received_all, max_polls=6)
+        except TimeoutError:
+            pass  # The next inbound reply can still supply a slot after the initial round.
+        else:
+            if fresh is None:
+                return  # A failed history read cannot be treated as a negative answer.
     for slot in offers:
         _PARTNER_GOOD.setdefault(service, {})[slot["facility"]] = None
     _LOG.warning(
@@ -1512,33 +1585,36 @@ async def _cup_cross_asst(
         message.need_id, len(searches), len(answered), len(offers), now.isoformat(), priority,
     )
     if offers:
-        await _cup_offer_batch(city, message, cache, citizen, offers, number, priority, replacing=replacing)
+        await _cup_offer_batch(city, message, cache, citizen, offers, number, priority, now=now, replacing=replacing)
         return
     pending = searches.keys() - answered
     if pending and monotonic() - cache.partner_search_started < _CUP_PARTNER_REPLY_SECONDS:
         return
     if relaxed and not _we(chat, city.agent_id, "relaxed=true", to=citizen, word="offer"):
         await _cup_offer_batch(
-            city, message, cache, citizen, relaxed, number, priority, replacing=replacing,
+            city, message, cache, citizen, relaxed, number, priority, now=now, replacing=replacing,
             note="Non ci sono orari che rispettano tutte le sue richieste nei tempi previsti. "
                  "Le propongo l'alternativa più vicina.",
         )
         return
     reason = "partner_unavailable" if pending else "no_slots"
-    notice = _no_slots_text(next(iter(_cup_case(chat, city.agent_id, citizen).offers), ""), reason)
-    said = any(_we(chat, city.agent_id, f"reason={code}", to=citizen, word="cancel")
+    notice = _no_slots_text(next(iter(_cup_case(chat, agent, citizen).offers), ""), reason, rechecked=rechecked)
+    search_history = (after_notice or []) if rechecked else chat
+    said = any(_we(search_history, agent, f"reason={code}", to=citizen, word="cancel")
                for code in ("partner_unavailable", "no_slots"))
-    if not said and not _exact(chat, city.agent_id, notice):
+    if not said and not _exact(search_history, agent, notice):
         await _cup_send(city, message, cache, citizen, notice)
 
 
-def _no_slots_text(open_offer: str, reason: str) -> str:
+def _no_slots_text(open_offer: str, reason: str, *, rechecked: bool = False) -> str:
     """No slot to propose. A cancel always names the offer it cancels (without it the citizen asks
     "Which offer_id?"); with no offer open it is a plain sentence with no act word."""
     sentence = (
         "Non ho trovato orari confermabili entro i tempi della sua priorità. "
         "Se può indicarmi altri giorni o orari che le vanno bene, riprovo subito."
     )
+    if rechecked:
+        sentence = "Al secondo controllo non ho ricevuto disponibilità confermabili entro i tempi della sua priorità."
     return f"cancel offer_id={open_offer} reason={reason} {sentence}" if open_offer else sentence
 
 
@@ -1572,13 +1648,17 @@ def _cup_doctor_gender(slot: dict[str, str]) -> str | None:
     return stated if stated in {"m", "f"} else None
 
 
-def _cup_varied(slots: list[dict[str, str]], count: int = 3) -> list[dict[str, str]]:
+_CUP_OFFERS_PER_BATCH = 5  # the citizen answers once: 3 offers were all refused in 56 of 90 journeys (11:20)
+
+
+def _cup_varied(slots: list[dict[str, str]], count: int | None = None) -> list[dict[str, str]]:
     """The offers for one message: the first slot as ranked, then the ones that add a doctor gender
     or a weekday not offered yet. The citizen has hidden gender and day preferences and answers once
     (console 21/11: all three offers refused with reason=gender or reason=day; on Thursday and
     Friday physiatry has only male doctors, so "one slot per day" gave three male offers).
     A new gender counts more than a new day; ties keep the original order."""
 
+    count = count or _CUP_OFFERS_PER_BATCH
     if len(slots) <= count:
         return list(slots)
     picked = [slots[0]]
@@ -1586,22 +1666,40 @@ def _cup_varied(slots: list[dict[str, str]], count: int = 3) -> list[dict[str, s
     while len(picked) < count and rest:
         days = {slot.get("day") for slot in picked}
         genders = {_cup_doctor_gender(slot) for slot in picked}
+        halves = {_cup_half_day(slot) for slot in picked}
 
         def gain(index: int) -> tuple[int, int]:
             slot = rest[index]
             gender = _cup_doctor_gender(slot)
             new_gender = gender is not None and gender not in genders
-            return (3 * new_gender + 2 * (slot.get("day") not in days), -index)
+            new_half = _cup_half_day(slot) not in halves  # hidden after=/before= preferences
+            return (3 * new_gender + 2 * (slot.get("day") not in days) + new_half, -index)
 
         picked.append(rest.pop(max(range(len(rest)), key=gain)))
     return picked
 
 
+def _cup_half_day(slot: dict[str, str]) -> str:
+    at = _when(slot.get("at", ""))
+    return "" if at is None else ("am" if at.hour < 13 else "pm")
+
+
 async def _cup_offer_batch(
     city: City, message: Message, cache: _Sent, citizen: str,
-    slots: list[dict[str, str]], number: str | None, priority: str | None, *, replacing: bool,
+    slots: list[dict[str, str]], number: str | None, priority: str | None, *, now: datetime, replacing: bool,
     note: str | None = None,
 ) -> None:
+    need_id = message.need_id or message.msg_id
+    offered_at = monotonic()
+
+    def rank(slot: dict[str, str]) -> tuple[bool, bool, bool, float]:
+        at = _when(slot["at"])
+        near = at is not None and _ahead(now, at) < _lead(priority)
+        prior = _CUP_RECENT_OFFERS.get((slot["facility"], slot["slot_id"]))
+        if prior is None or prior[0] == need_id or offered_at - prior[1] >= _CUP_OFFER_SPREAD_SECONDS:
+            return near, False, False, 0.0
+        return near, True, prior[2], prior[1]
+
     batch = token_hex(6)
     instruction = (
         "Mi risponda con l'orario che preferisce; se nessuno le va bene, me lo dica e cerco altre date."
@@ -1609,8 +1707,8 @@ async def _cup_offer_batch(
     if note:
         instruction = f"{note} {instruction}"
     options = []
-    delivered = set()
-    for index, slot in enumerate(_cup_varied(slots), 1):
+    delivered = []
+    for index, slot in enumerate(_cup_varied(sorted(slots, key=rank)), 1):
         line = _offer_line(slot, number, priority, offer_id=f"of-{batch}-{index}")
         if note:
             line += " relaxed=true"
@@ -1620,11 +1718,20 @@ async def _cup_offer_batch(
             line += f" Il {at:%d/%m} alle {at:%H:%M}."
         if len("\n".join([*options, line, instruction])) <= _CUP_MAX_TEXT:
             options.append(line)
-            delivered.add(slot["slot_id"])
-    if options and await _cup_send(city, message, cache, citizen, "\n".join([*options, instruction])):
-        cache.offers.update(delivered)
+            delivered.append((slot["facility"], slot["slot_id"]))
+    if not options:
+        return
+    # Advisory only, within this process. Record before the send can yield to another need.
+    for index, key in enumerate(delivered):
+        _CUP_RECENT_OFFERS[key] = need_id, offered_at, index == 0
+        _CUP_RECENT_OFFERS.move_to_end(key)
+    while len(_CUP_RECENT_OFFERS) > _SENT_NEEDS:
+        _CUP_RECENT_OFFERS.popitem(last=False)
+    if await _cup_send(city, message, cache, citizen, "\n".join([*options, instruction])):
+        slots_sent = {slot_id for _, slot_id in delivered}
+        cache.offers.update(slots_sent)
         if replacing:
-            cache.again.update(delivered)
+            cache.again.update(slots_sent)
 
 
 async def _advance_alone(
@@ -1696,13 +1803,15 @@ async def _advance_alone(
                 await _cup_send(city, message, sent, LEDGER, "agenda")
             if hint and _latest_slots(known) is None and not _asked(chat, agent, hint, 1):
                 await _cup_send(city, message, sent, LEDGER, f"world procedure={hint} page=1")
-            chat = await _until(
+            rows = await _until(
                 city,
                 message.need_id,
                 chat,
                 lambda rows: _cup_prescription(rows, number, citizen) is not None,
             )
-            chat = _cup_history(chat, sent, agent, key)
+            if rows is None:
+                return
+            chat = _cup_history(rows, sent, agent, key)
             continue
         if not procedure:
             return
@@ -1717,13 +1826,15 @@ async def _advance_alone(
             await _cup_send(city, message, sent, LEDGER, "agenda")
         if world is None and not _asked(fresh(chat), agent, procedure, 1):
             await _cup_send(city, message, sent, LEDGER, f"world procedure={procedure} page=1")
-        chat = await _until(
+        rows = await _until(
             city,
             message.need_id,
             chat,
             lambda rows: _has_agenda(fresh(rows)) and _latest_slots(fresh(rows)) is not None,
         )
-        chat = _cup_history(chat, sent, agent, key)
+        if rows is None:
+            return
+        chat = _cup_history(rows, sent, agent, key)
     else:
         return
     if now is None or world is None:
@@ -1770,7 +1881,7 @@ async def _advance_alone(
         days=_cup_days(chat, citizen), until=_true_deadline(chat, citizen, priority),
     )
     if chosen:
-        await _cup_offer_batch(city, message, sent, citizen, chosen, number, priority, replacing=replacing)
+        await _cup_offer_batch(city, message, sent, citizen, chosen, number, priority, now=now, replacing=replacing)
         return
     if taken and not replacing:
         return
@@ -1791,7 +1902,7 @@ async def _advance_alone(
             return sum(1 for row in rows if row.sender == LEDGER and first_word(row.text) == "slots")
         before = pages_read(chat)
         fresh_rows = await _until(city, message.need_id, chat, lambda rows: pages_read(rows) > before)
-        if pages_read(fresh_rows) > before:
+        if fresh_rows is not None and pages_read(fresh_rows) > before:
             await _advance_alone(
                 city, message, _cup_history(fresh_rows, sent, agent, key), key, replacing=replacing,
             )
@@ -1804,7 +1915,7 @@ async def _advance_alone(
         if case.cross_asst_declined:
             if relaxed:
                 await _cup_offer_batch(
-                    city, message, sent, citizen, relaxed, number, priority, replacing=replacing,
+                    city, message, sent, citizen, relaxed, number, priority, now=now, replacing=replacing,
                     note="Questi orari della nostra ASST richiedono flessibilità sui giorni o sulla scadenza.",
                 )
             return

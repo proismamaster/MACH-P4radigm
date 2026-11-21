@@ -40,6 +40,7 @@ class Run(base.Mailbox):
         return [row.text for row in self.sent if row.recipient == base.CITIZEN]
 
 
+@patch.object(cup, "_CUP_OFFERS_PER_BATCH", 3)
 class DeadlineTests(unittest.IsolatedAsyncioTestCase):
     async def test_no_slots_without_an_offer_is_plain_italian(self):
         box = Run("plain", "B", [])
