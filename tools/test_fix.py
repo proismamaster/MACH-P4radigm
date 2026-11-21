@@ -109,6 +109,9 @@ async def main():
     await gp("Buongiorno dottore, ho un forte dolore al petto da stamattina", "escalate")
     print("GP - red flag nascosta letta dalla tabella del world (livello 8)")
     h = harness("gp", GP, role_card="gp")
+    # GP 1.0.9: without a world after the short wait the built-in table prescribes (84 world of 84 had no
+    # protocols). Empty here, so the world's own red flags are what decides.
+    h.mod._PROTOCOLS = {}
     base = World.answer
 
     def world_with_flags(text, _w=h.world):

@@ -308,7 +308,7 @@ async def _until(
 
 # The world reply is in the case history as soon as the Relay accepts it; the push that would open the
 # next turn comes 60-90 s later or not at all. Read it here, bounded by real time, like `prescribed`.
-_WORLD_WAIT = 180.0
+_WORLD_WAIT = 20.0  # 13:30 UTC: 42 citizens without a reply after 7 min waiting for a world with no protocols
 _WORLD_STEP = 1.0
 
 
@@ -484,7 +484,7 @@ def _gp_is_world(row: Message) -> bool:
 # red flag, and the Ledger answered 7-9 real minutes after the request: waiting for world before every
 # prescription cost each citizen a Ledger round trip (agenda hours of its B window). The world is the same
 # for the whole wave, so one reading serves every citizen of that wave for ten minutes.
-_WORLD_SECONDS = 600
+_WORLD_SECONDS = 3600  # the bursts come every 20 minutes: 600 s expired before the next one
 _WORLD: dict[str, tuple[list[Message], float]] = {}
 
 
@@ -725,9 +725,9 @@ async def _gp_select_protocol(
         fresh = await _gp_wait_world(city, message.need_id, chat)
         chat = _gp_case(fresh, message)
     if not _gp_world_received(chat):
-        # Never prescribe before reading world: level 8 hides red flags in its protocol table. The
-        # wait is 6 s (was 2 s: a slow world left the GP silent, 201); the world's own turn resumes.
-        return None
+        # 04:18-05:12: 84 world replies of 84 had no protocol table and no red flag, 7-9 minutes late. After
+        # the short wait the built-in table prescribes; the citizen's red flags are checked on the text.
+        return _PROTOCOLS.get(code)
     # The local SDK's world can explicitly answer with slots and no protocol table.
     return _gp_protocols(chat).get(code) or _PROTOCOLS.get(code)
 
