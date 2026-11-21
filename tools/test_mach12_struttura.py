@@ -207,11 +207,150 @@ async def righe_vere() -> None:
               and "agenda_date=2026-11-24T09:30:00.000Z" in o for o in offers), h)
 
 
+# --- Livello 6-7: riprenotazione dopo un annullo e idempotenza (solo consultorio) ---------------------
+# Assunzioni (MACH-1.2, "REBOOK COMBO"; il formato del messaggio di annullo non e' nel kit):
+# - Il Ledger o la citta' avvisa il consultorio con `fault.cancel booking_id=... reason=facility_cancelled`.
+# - Chi aveva prenotato (cittadino o CUP) riceve UN solo messaggio: prima riga
+#   `cancel reason=facility_cancelled booking_id=...`, sotto da 1 a 3 righe `offer`, prima quelle
+#   con la stessa dottoressa. Mai lo slot annullato.
+# - Stesso confirm = stessa ricevuta e mai un secondo hold. Stessa request_id = stesse offerte.
+DOC2 = "asst-bicocca-c2"  # medico fuori dalla tabella: non viene scartato
+
+
+def rslot(slot_id: str, doctor: str, when: str, day: str) -> str:
+    return (f"slot_id={slot_id} capacity=1 facility={ME} doctor_id={doctor} procedure={PROC} "
+            f"agenda_day={day} agenda_date={when} urgent_reserve=false")
+
+
+R1 = rslot("R-1", DOC, "2026-11-24T09:30:00.000Z", "tue")    # quello prenotato e poi annullato
+R2 = rslot("R-2", DOC, "2026-11-24T13:30:00.000Z", "tue")    # stessa dottoressa
+R3 = rslot("R-3", DOC, "2026-11-25T09:30:00.000Z", "wed")    # stessa dottoressa
+R4 = rslot("R-4", DOC2, "2026-11-23T14:00:00.000Z", "mon")   # altra dottoressa, la piu' presto
+R5 = rslot("R-5", DOC2, "2026-11-26T09:00:00.000Z", "thu")   # altra dottoressa, fuori dal limite di 3
+REBOOK_ROWS = [R1, R2, R3, R4, R5]
+FAULT = "fault.cancel booking_id={b} reason=facility_cancelled"
+
+
+def after_row(h: tf.Harness, marker: str, to: str) -> list[str]:
+    """I messaggi del consultorio a `to` scritti dopo la riga `marker` (testo che inizia cosi')."""
+    log = h.port.log
+    start = next((i for i, r in enumerate(log) if r.text.startswith(marker)), len(log))
+    return [r.text for r in log[start:] if r.sender == ME and r.recipient == to]
+
+
+async def riprenota_cittadino() -> None:
+    print("Riprenotazione dopo annullo: cittadino")
+    cit = "citizen:t02/c-0300"
+    h = harness(REBOOK_ROWS)
+    await h.turn(cit, "vorrei una visita ginecologica")
+    await h.turn(cit, "confirm offer_id=of-R-1 consent_ref=cons-N-booking")
+    receipts = h.out(cit, "booking.receipt")
+    check("prima della prova: prenotazione R-1 con ricevuta", len(receipts) == 1
+          and "slot_id=R-1" in receipts[0], h)
+    booking = tokens(receipts[0]).get("booking_id", "BK-H-1") if receipts else "BK-H-1"
+    fault = FAULT.format(b=booking)
+    await h.turn(tf.LEDGER, fault)
+    out = after_row(h, "fault.cancel", cit)
+    first = out[0].splitlines()[0] if out else ""
+    check("un solo messaggio al cittadino dopo l'annullo", len(out) == 1, h)
+    check("prima riga: cancel reason=facility_cancelled booking_id=...",
+          first.split()[:1] == ["cancel"] and "reason=facility_cancelled" in first
+          and f"booking_id={booking}" in first, h)
+    offers = lines_of(out[0], "offer") if out else []
+    check("sotto il cancel, da 1 a 3 offerte e nient'altro",
+          1 <= len(offers) <= 3 and len(out[0].splitlines()) == 1 + len(offers), h)
+    check("prima la stessa dottoressa (R-2, R-3), poi l'altra (R-4)",
+          [tokens(o).get("slot_id") for o in offers] == ["R-2", "R-3", "R-4"], h)
+    check("mai lo slot annullato R-1", "slot_id=R-1" not in " ".join(offers), h)
+    check("ogni offerta ha offer_id, slot_id e agenda_date",
+          bool(offers) and all({"offer_id", "slot_id", "agenda_date"} <= set(tokens(o))
+                               for o in offers), h)
+    await h.turn(tf.LEDGER, fault)
+    check("stesso annullo ripetuto: nessun secondo messaggio",
+          len(after_row(h, "fault.cancel", cit)) == 1, h)
+    # Il cittadino sceglie l'ultima offerta del messaggio multiplo: il hold deve essere su R-4.
+    await h.turn(cit, "confirm offer_id=of-R-4 consent_ref=cons-N-booking2")
+    holds = h.out(tf.LEDGER, "hold")
+    check("conferma dell'ultima offerta del messaggio multiplo: hold su R-4",
+          len(holds) == 2 and "slot_id=R-4" in holds[-1], h)
+
+
+async def riprenota_cup() -> None:
+    print("Riprenotazione dopo annullo: CUP")
+    h = harness(REBOOK_ROWS)
+    await h.turn(CUP, search("rq-F1", ""))
+    await h.turn(CUP, "confirm offer_id=of-R-1 slot_id=R-1 citizen=citizen:t01/c-9 "
+                      "consent_ref=cons-1 request_id=rq-F1")
+    receipts = h.out(CUP, "booking.receipt")
+    check("prima della prova: ricevuta al CUP per R-1", len(receipts) == 1
+          and "slot_id=R-1" in receipts[0], h)
+    booking = tokens(receipts[0]).get("booking_id", "BK-H-1") if receipts else "BK-H-1"
+    await h.turn(tf.LEDGER, FAULT.format(b=booking))
+    out = after_row(h, "fault.cancel", CUP)
+    first = out[0].splitlines()[0] if out else ""
+    check("un solo messaggio al CUP dopo l'annullo", len(out) == 1, h)
+    check("prima riga: cancel reason=facility_cancelled booking_id=...",
+          first.split()[:1] == ["cancel"] and "reason=facility_cancelled" in first
+          and f"booking_id={booking}" in first, h)
+    offers = lines_of(out[0], "offer") if out else []
+    check("offerte con request_id=rq-F1, prima la stessa dottoressa",
+          [tokens(o).get("slot_id") for o in offers] == ["R-2", "R-3", "R-4"]
+          and all(tokens(o).get("request_id") == "rq-F1" for o in offers), h)
+    check("mai lo slot annullato R-1", "slot_id=R-1" not in " ".join(offers), h)
+    check("nessun messaggio al cittadino: i suoi dati restano al CUP",
+          not h.out("citizen:"), h)
+
+
+async def idempotenza() -> None:
+    print("Idempotenza (livello 7)")
+    cit = "citizen:t02/c-0310"
+    confirm = "confirm offer_id=of-R-1 consent_ref=cons-N-booking"
+    h = harness(REBOOK_ROWS)
+    await h.turn(cit, "vorrei una visita ginecologica")
+    await h.turn(cit, confirm)
+    await h.turn(cit, confirm)
+    receipts = h.out(cit, "booking.receipt")
+    check("stesso confirm due volte: un solo hold e un solo commit",
+          len(h.out(tf.LEDGER, "hold")) == 1 and len(h.out(tf.LEDGER, "commit")) == 1, h)
+    check("stesso confirm: la ricevuta e' sempre la stessa",
+          bool(receipts) and len(set(receipts)) == 1, h)
+
+    # La cronologia del Relay puo' non mostrare ancora il hold: il secondo confirm non lo ripete.
+    h = harness(REBOOK_ROWS)
+    await h.turn(cit, "vorrei una visita ginecologica")
+    await h.turn(cit, confirm)
+    real_history = h.port.history
+
+    async def stale(*, peer=None, need_id=None):
+        rows = await real_history(peer=peer, need_id=need_id)
+        return [r for r in rows if tf.LEDGER not in (r.sender, r.recipient)]
+
+    h.port.history = stale
+    await h.turn(cit, confirm)
+    check("cronologia in ritardo: nessun secondo hold e nessun secondo commit",
+          len(h.out(tf.LEDGER, "hold")) == 1 and len(h.out(tf.LEDGER, "commit")) == 1, h)
+
+    # Stessa request_id, mondo cambiato nel frattempo: le offerte restano le stesse.
+    h = harness(REBOOK_ROWS)
+    await h.turn(CUP, search("rq-I1", ""))
+    h.world.slots[f"{PROC}:1"] = tf.slots_reply(ME, [R5])
+    await h.turn(CUP, search("rq-I1", ""))
+    out = replies(h)
+    check("stessa request_id due volte: due risposte identiche (stesse offerte)",
+          len(out) == 2 and out[0] == out[1] and bool(lines_of(out[0], "offer")), h)
+    check("la prima risposta non e' cambiata dal mondo nuovo (niente R-5)",
+          bool(out) and "slot_id=R-5" not in out[0], h)
+
+
 async def run() -> None:
     await righe_vere()
     await criteri_estesi()
     await offerte_rilassate()
     await sedia_a_rotelle()
+    if ROLE == "family_counseling":
+        await riprenota_cittadino()
+        await riprenota_cup()
+        await idempotenza()
     print(f"\n{'TUTTO OK' if not tf.FAILS else str(len(tf.FAILS)) + ' FALLITE'}")
     sys.exit(1 if tf.FAILS else 0)
 
