@@ -1,5 +1,19 @@
 # Journal (la voce più recente in alto)
 
+## 2026-11-21 11:30 — Alberto (Hhapca, con Claude) — Consultorio 1.0.12 online; con il Ledger a 3 minuti nessun commit può riuscire
+
+**Fatto**
+- **1.0.12 online dalle 10:24 UTC** (`dep-51f2bf67c40040fe84dc12ce18fca974`, conformance PASS al primo tentativo in 4,9 s), da `main` @ `f3f5f9f`: offerte sostitutive in sospeso (`replace:pending`) e riprova unica anche tra pod (`_held_since`), più la Prova O di `tools/test_facility.py` e l'attesa paziente dell'ospedale (#113, non online). Card 1.0.13 e riga nel registro in `main` (`c6a9fd3`). Rollback: `city rollback agent:nkh372rd16yq --to 1.0.11`.
+- Prova in vivo: caso 911000386, `held` alle 10:22:30 e **commit alle 10:22:31**, ma `STALE_FENCE` alle 10:25:35. Con 3 minuti di Ledger a ogni richiesta l'hold scade prima che il commit sia processato, anche partendo subito.
+
+**Problemi**
+- Il collo di bottiglia è la latenza del Ledger (199-221 s per richiesta, push 60-200 s): finché non scende sotto i ~100 s nessun team può prenotare. Il nostro codice è ora al meglio per quando scenderà.
+- Resta da fare, in rilasci separati: anticipo minimo 16-20 ore per l'accesso diretto; niente riprova dopo `STALE_FENCE` se lo slot è a meno di ~8 ore d'agenda (003290005: due hold su uno slot già passato).
+- Da verificare in vivo: le offerte sostitutive in sospeso (911000382 aspetta la pagina 2).
+
+**Prossimo passo**
+- Rimisurare con `await misura('agent:nkh372rd16yq')` quando la latenza del Ledger scende, e guardare `held` → commit contro `STALE_FENCE`.
+
 ## 2026-11-21 11:22 — Alberto (Hhapca, con Claude) — Consultorio 1.0.11 online; due difetti miei trovati in console, correzione pronta
 
 **Fatto**

@@ -1,6 +1,13 @@
 
 # Problemi
 
+## Consultorio 1.0.12 online (10:24 UTC) e prova diretta del limite della piattaforma (21/11 10:25)
+
+- **L'attesa nella cronologia funziona:** caso 911000386, `held` alle 10:22:30 (il Ledger aveva impiegato 207 s per l'hold), **commit partito alle 10:22:31, un secondo dopo**. Prima partiva 60-190 s dopo.
+- **Ma il commit fallisce lo stesso:** `refused commit code=STALE_FENCE detail=the fence expired` alle 10:25:35, 185 s dopo `held`. È la conferma diretta della stima dei dati (un hold regge poco più di 100 s, i riusciti hanno `held` → esito sotto i 98 s, i falliti da 125 s): **con il Ledger a ~3 minuti per richiesta nessun commit può riuscire, nemmeno partendo subito**. Il limite non è il nostro codice: si sblocca solo quando la latenza del Ledger scende sotto i ~100 s (alle 08-10 UTC c'erano finestre da 40-90 s e 4 commit su 9 riuscivano).
+- Offerte sostitutive con `replace:pending` e riprova unica tra pod: nessuna riga `care.*.failed` nei log, nessun hold doppio nei primi percorsi della 1.0.12; la prova in vivo delle sostitutive in sospeso aspetta un caso con la pagina 2 in ritardo (911000382, cancel alle 10:26:02, pagina 2 chiesta alle 10:26:03).
+- **Da fare, in rilasci separati:** (1) anticipo minimo per l'accesso diretto a 16-20 ore (senza scadenza: costa solo qualche slot), (2) niente riprova dopo `STALE_FENCE` se lo slot è a meno di ~8 ore d'agenda (la riprova costa due giri del Ledger = 7 ore alla latenza di oggi): il caso 003290005 ha fatto due hold su uno slot già passato (`EXPIRED ... has passed` a 10:17:00 e 10:18:06).
+
 ## Primi percorsi della 1.0.10 e 1.0.11 (21/11 10:10-10:16 UTC): due difetti miei, uno slot che scade
 
 Fonte: i messaggi del consultorio (`/v1/team/agents/agent:nkh372rd16yq/messages`) subito dopo i rilasci delle 10:06 e delle 10:15.
