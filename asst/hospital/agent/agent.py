@@ -24,6 +24,11 @@ _MAX_PAGE = 8
 # Four agenda hours is about half a minute of real time at 480x, so a slot is still
 # ahead when the citizen decides. One hour was already past by then.
 _LEAD = timedelta(hours=4)
+# The citizen answers an offer 3-20 real minutes later, i.e. 3-27 AGENDA hours (1 real minute = 1
+# agenda hour): a slot a few hours away is already past when the confirm arrives (EXPIRED,
+# reason=past; 59 confirms out of 61 without a receipt, PROBLEMS 04:25). Slots at least this far
+# ahead go first; the nearer ones stay at the end of the list as a fallback.
+_DECISION_LEAD = timedelta(hours=24)
 # Doctor key (the last segment of doctor_id) -> languages, gender, days. ``*`` is the ASST's
 # rare language. The Ledger's slot line names the doctor; it does not repeat this table.
 _DOCTORS: dict[str, tuple[frozenset[str], str, frozenset[str]]] = {
@@ -1464,7 +1469,8 @@ def _facility_slots(
             reserved += 1
             continue
         chosen.append((at, slot))
-    chosen.sort(key=lambda item: (item[0], item[1].get("slot_id", "")))
+    decided = None if now is None or priority == "U" else now + _DECISION_LEAD
+    chosen.sort(key=lambda item: (decided is not None and item[0] < decided, item[0], item[1].get("slot_id", "")))
     return [slot for _, slot in chosen], reserved
 
 

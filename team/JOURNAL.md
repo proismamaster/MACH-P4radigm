@@ -1,5 +1,12 @@
 # Journal (la voce più recente in alto)
 
+## 2026-11-21 04:32 — Andrei (Claude) — Ospedale: prima gli slot ad almeno 24 ore d'agenda
+
+**Fatto**
+- Dalla causa trovata da Hapca (PROBLEMS 04:25: il cittadino decide dopo 3-27 ore d'agenda, lo slot è già passato): nelle offerte dell'ospedale ai CUP prima gli slot ad almeno 24 ore d'agenda (`_DECISION_LEAD`), i vicini in coda (mai una lista più vuota di prima). U invariata. Vale anche per la riprenotazione del livello 6.
+- Test: prova K (fallisce su main). Ospedale TUTTO OK.
+- **Il CUP e il consultorio hanno bisogno della stessa cosa** (CUP: `_LEAD`/`_MIN_LEAD` in `fitting` e nelle offerte dei partner; consultorio: `_LEAD`). Hapca o io, prima delle 05:30.
+
 ## 2026-11-21 04:40 — Andrei (Claude) — Ospedale: P2 con gli ID veri; follow-up dello specialist in sospeso
 
 **Fatto**

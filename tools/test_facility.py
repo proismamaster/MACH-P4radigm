@@ -678,6 +678,33 @@ async def prova_j() -> None:
           len(holds) == 1 and "consent_ref=cons-N-booking" in holds[0], h)
 
 
+async def prova_k() -> None:
+    """Il cittadino decide dopo 3-20 minuti reali = 3-27 ORE d'agenda (PROBLEMS, 04:25): uno slot a
+    poche ore e' gia' passato quando conferma (EXPIRED, reason=past, 59 confirm su 61 senza ricevuta).
+    Prima gli slot ad almeno 24 ore d'agenda, i vicini in coda; U (stesso giorno) come prima."""
+
+    print("Prova K - prima gli slot ad almeno 24 ore d'agenda (il cittadino decide dopo ore)")
+    rows = [
+        "slot_id=N-1 doctor_id=D-x1 facility=ME procedure=VIS-FIS at=2026-11-23T13:00:00+01:00 day=mon free=1",
+        "slot_id=N-2 doctor_id=D-x1 facility=ME procedure=VIS-FIS at=2026-11-23T16:00:00+01:00 day=mon free=1",
+        "slot_id=F-1 doctor_id=D-x1 facility=ME procedure=VIS-FIS at=2026-11-24T10:00:00+01:00 day=tue free=1",
+        "slot_id=F-2 doctor_id=D-x2 facility=ME procedure=VIS-FIS at=2026-11-24T15:00:00+01:00 day=tue free=1",
+    ]
+    h = Harness("hospital.physiatry", HOSP, World(HOSP, {"VIS-FIS:1": slots_reply(HOSP, rows)}))
+    await h.turn(CUP_EXT, SEARCH)
+    offers = h.out(CUP_EXT, "offer")
+    order = [w.split("=", 1)[1] for line in (offers[0].splitlines() if offers else [])
+             for w in line.split() if w.startswith("slot_id=")]
+    check("B di lunedi' 08:00: prima martedi' (F-1, F-2, oltre 24 ore), poi il vicino N-1",
+          order == ["F-1", "F-2", "N-1"], h, )
+
+    h = Harness("hospital.physiatry", HOSP, World(HOSP, {"VIS-FIS:1": slots_reply(HOSP, rows)}))
+    await h.turn(CUP_EXT, SEARCH.replace("priority=B", "priority=U"))
+    body = " ".join(h.out(CUP_EXT, "offer"))
+    check("U (stesso giorno): offre gli slot di oggi come prima",
+          "slot_id=N-1" in body and "slot_id=F-1" not in body, h)
+
+
 async def run() -> None:
     # Ogni agente ha le sue prove: A, B, D, F, G e I provano l'ospedale, C il consultorio; E e H valgono per tutti.
     if "family_counseling" in os.path.normpath(AGENT_FILE).split(os.sep):
@@ -690,6 +717,7 @@ async def run() -> None:
         await prova_g()
         await prova_i()
         await prova_j()
+        await prova_k()
     await prova_e()
     await prova_h()
     print(f"\n{'TUTTO OK' if not FAILS else str(len(FAILS)) + ' FALLITE'}")
