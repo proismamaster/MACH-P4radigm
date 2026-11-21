@@ -1,5 +1,13 @@
 # Journal (la voce più recente in alto)
 
+## 2026-11-21 04:40 — Andrei (Claude) — Ospedale: P2 con gli ID veri; follow-up dello specialist in sospeso
+
+**Fatto**
+- `_other_asst` cercava la squadra nell'id (`agent:<team>/<slug>`); gli ID della città non ce l'hanno (`agent:ez8cb7j167p2`), quindi era sempre falso. Per i CUP di altre ASST: `cross_asst_consent_ref` ignorato (hold col consenso sbagliato, `CONSENT_MISSING` con P2 attiva) e nessun blocco senza consenso cross. Ora, se l'id non ha la squadra, è "altra ASST" ogni agente che non è uno dei nostri cinque (`_OUR_AGENTS`, ID fissi di AI.md).
+- Test: prova J in `tools/test_facility.py` (2 controlli falliscono su main, il controllo col nostro CUP passa). Ospedale TUTTO OK; test_l8_ostili e test_fix verdi.
+- Il consultorio ha lo stesso `_other_asst` (Hapca).
+- Follow-up dello specialist: non implementato. Il kit dice solo "lo decide lo specialista quando il percorso lo richiede"; nessun verdetto visto lo mostra. Serve un percorso di cardiologia in console con le righe del verdetto dello specialist.
+
 ## 2026-11-21 04:20 — Alberto (Hhapca, con Claude) — Consultorio 1.0.7 e correzioni del CUP in main
 
 **Fatto**

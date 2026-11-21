@@ -1250,9 +1250,23 @@ def _team_of(agent_id: str) -> str:
     return head.split("/", 1)[0] if "/" in head else ""
 
 
+# Our five agents (console, AI.md). The city's ids carry no team segment (agent:<id>), so the team
+# cannot be read from the id: with only _team_of every booking centre looked like ours, the
+# cross_asst consent of another ASST was ignored and P2 was never applied (Prova J).
+_OUR_AGENTS = frozenset({
+    "agent:ez8cb7j167p2",  # booking_centre
+    "agent:rng5wcrzvhsj",  # gp
+    "agent:bb01ggxymm05",  # hospital
+    "agent:sh35cbsy287d",  # specialist
+    "agent:nkh372rd16yq",  # family_counseling
+})
+
+
 def _other_asst(sender: str, me: str) -> bool:
     theirs, ours = _team_of(sender), _team_of(me)
-    return bool(theirs and ours and theirs != ours)
+    if theirs and ours:
+        return theirs != ours
+    return sender.startswith("agent:") and sender != me and sender not in _OUR_AGENTS
 
 
 def _same_agent(a: str, b: str) -> bool:
