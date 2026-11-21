@@ -621,16 +621,16 @@ async def prova_h() -> None:
 
 
 async def run() -> None:
-    # Ogni agente ha le sue prove: A, B e D provano l'ospedale, C il consultorio; E vale per tutti.
+    # Ogni agente ha le sue prove: A, B, D, F e G provano l'ospedale, C il consultorio; E e H valgono per tutti.
     if "family_counseling" in os.path.normpath(AGENT_FILE).split(os.sep):
         await prova_c()
     else:
         await prova_a()
         await prova_b()
         await prova_d()
+        await prova_f()
+        await prova_g()
     await prova_e()
-    await prova_f()
-    await prova_g()
     await prova_h()
     print(f"\n{'TUTTO OK' if not FAILS else str(len(FAILS)) + ' FALLITE'}")
     sys.exit(1 if FAILS else 0)
