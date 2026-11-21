@@ -350,8 +350,10 @@ async def _await_line(
     token: str,
     *,
     op: str,
+    skip: frozenset[str] = frozenset(),
 ) -> tuple[Message, list[Message]] | None:
-    """The ledger line for ``token``, or a refusal of ``op`` that was not already in ``chat``."""
+    """The ledger line for ``token``, or a refusal of ``op`` that was not already in ``chat``.
+    Rows in ``skip`` (by msg_id) are ignored: a second hold must wait for ITS held line."""
 
     known = {row.msg_id for row in chat}
     fresh = chat
@@ -360,7 +362,7 @@ async def _await_line(
             fresh = await city.history(need_id=need_id)
         except CapError:
             fresh = chat
-        hit = _latest(fresh, head, token)
+        hit = _latest([row for row in fresh if row.msg_id not in skip], head, token)
         if hit is not None:
             return hit, fresh
         for row in fresh:
@@ -949,11 +951,19 @@ def _latest_hold(chat: list[Message], agent: str) -> tuple[str, str | None]:
 
 
 async def _finish_booking(
-    city: City, message: Message, chat: list[Message], slot: str, *, hold_self: bool
+    city: City,
+    message: Message,
+    chat: list[Message],
+    slot: str,
+    *,
+    hold_self: bool,
+    skip: frozenset[str] = frozenset(),
 ) -> None:
     """Hold is in the mailbox. Read the held line and commit before this turn ends."""
 
-    found = await _await_line(city, message.need_id, chat, "held", f"slot_id={slot}", op="hold")
+    found = await _await_line(
+        city, message.need_id, chat, "held", f"slot_id={slot}", op="hold", skip=skip
+    )
     if found is None:
         _LOG.info("care.held.missing", extra={"need_id": (message.need_id or "")[:48]})
         return
@@ -966,7 +976,7 @@ async def _finish_booking(
     if not hold_id:
         return
     done = await _await_line(
-        city, message.need_id, fresh, "committed", f"booking_id={hold_id}", op="commit"
+        city, message.need_id, fresh, "committed", f"booking_id={hold_id}", op="commit", skip=skip
     )
     if done is None:
         _LOG.info("care.commit.missing", extra={"need_id": (message.need_id or "")[:48]})
@@ -1077,6 +1087,7 @@ def _refusal_reason(text: str) -> str:
 # Level 8: the Ledger's own refusal, as the booking centre reads it. These three are a cancel with
 # the code in lower case; any other Ledger code is a hold_refused that names it.
 _CANCEL_CODES = {"prescription_expired", "consent_missing", "no_capacity"}
+_RETRY_CODES = {"EXPIRED", "STALE_FENCE"}
 
 
 def _refusal_line(reason: str, offer_id: str, slot: str, to_centre: bool) -> str:
@@ -1114,6 +1125,21 @@ async def _on_refused(
                 slot = fields_of(row.text).get("slot_id", slot)
     if not slot:
         return
+    # A hold that expired or carries an old fence (console 256, 229, 248): the citizen's confirm is
+    # still good, so hold and commit once more before cancelling. One retry per slot.
+    memory = _sent(f"confirm:{message.need_id or message.msg_id}")
+    if _refusal_reason(message.text).upper() in _RETRY_CODES and f"retry:{slot}" not in memory.offers:
+        prior = [
+            row for row in chat
+            if row.sender == agent and row.recipient == LEDGER and first_word(row.text) == "hold"
+            and f"slot_id={slot}" in row.text.split()
+        ]
+        if prior:
+            memory.offers.add(f"retry:{slot}")
+            if await _say(city, LEDGER, prior[-1].text):
+                known = frozenset(row.msg_id for row in chat)
+                await _finish_booking(city, message, chat, slot, hold_self=hold_self, skip=known)
+                return
     target, _, _ = _booking_of(chat, agent, slot)
     offer_id = _confirmed_offer(chat, agent, slot)
     if not offer_id:
