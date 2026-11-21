@@ -650,7 +650,7 @@ async def _on_committed(city: City, message: Message, chat: list[Message]) -> No
     if _we(chat, city.agent_id, token, to=target, word="booking.receipt"):
         return
     line = f"booking.receipt booking_id={booking_id} ledger_ref={ledger_ref}"
-    if target.startswith("agent:") and slot:
+    if slot:
         # Cross-ASST: the booking centre matches the receipt to its confirm by slot and offer.
         offer_id = next(
             (fields_of(row.text).get("offer_id", "") for row in reversed(chat)
@@ -670,8 +670,9 @@ async def _on_refused(
     slot_id or hold_id, keep the Ledger code, and never cancel after a valid receipt."""
     agent = city.agent_id
     refused = fields_of(message.text)
-    code = refused.get("code") or next((t for t in message.text.split() if t.isupper() and "_" in t), "")
-    if "commit" in words(message.text) and code == "DUPLICATE":
+    code = (refused.get("code") or refused.get("reason") or refused.get("error")
+            or next((t for t in message.text.split() if re.fullmatch(r"[A-Z][A-Z_]{3,}", t)), ""))
+    if "commit" in words(message.text) and (code.upper() == "DUPLICATE" or "DUPLICATE" in message.text.split()):
         return  # the hold is already committed: the booking stands
     slot = refused.get("slot_id") or _hold_slot(chat, agent, refused.get("hold_id", ""))
     if not slot and not (refused.get("slot_id") or refused.get("hold_id")):
@@ -681,7 +682,7 @@ async def _on_refused(
     if not slot:
         return
     target, _, _ = _booking_of(chat, agent, slot)
-    if not target or _we(chat, agent, f"slot_id={slot}", to=target, word="booking.receipt"):
+    if not target or _receipt_sent(chat, agent, target, slot):
         return  # never cancel after a valid receipt
     offer_id = ""
     for row in chat:
@@ -703,6 +704,19 @@ async def _on_refused(
     else:
         line = f"cancel offer_id={offer_id} slot_id={slot} reason={code or 'facility_cancelled'}"
     await _say(city, target, line)
+
+
+def _receipt_sent(chat: list[Message], agent: str, target: str, slot: str) -> bool:
+    """A booking.receipt already went to ``target`` for this slot. Receipts to a citizen may carry no
+    slot_id (older ones), so any receipt to the citizen after its confirm for this slot counts."""
+    confirmed = False
+    for row in chat:
+        if row.sender == target and f"slot_id={slot}" in row.text.split() and "confirm" in words(row.text):
+            confirmed = True
+        if row.sender == agent and row.recipient == target and first_word(row.text) == "booking.receipt":
+            if f"slot_id={slot}" in row.text.split() or (confirmed and target.startswith("citizen:")):
+                return True
+    return False
 
 
 def _our_offer_for_slot(chat: list[Message], agent: str, slot: str) -> str:
