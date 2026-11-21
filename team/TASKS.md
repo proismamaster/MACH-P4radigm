@@ -22,6 +22,17 @@ Aggiorna la tua riga quando cambi stato. Un compito tocca solo i file indicati.
 | Pitch e vision 2027 | Ettore | `team/pitch.md` | in corso | — | sabato 14:00 |
 | Merge delle PR e decisioni | Andrei | tutto (solo merge) | dall'1:00 | — | — |
 
+## Analisi delle 13:15 (stop codice 16:00) — una per persona, poi PR e messaggio nel gruppo
+
+Base comune: `team/PROJECT.md` → "Stato attuale" e `team/RILASCI.md` → "Online ora". Dati: export dei falliti (`scarica-falliti.user.js`) e console. Prima di correggere: test che fallisce. Rilasci: regola in `PROJECT.md` (si scrive nel gruppo, si controllano deployment in corso e ultima riga di RILASCI, uno alla volta).
+
+| Chi | Analisi | Dati | Esito atteso |
+|---|---|---|---|
+| Hapca | Consultorio: `_MIN_LEAD` 10 ore porta a cancel `past` (5 su 6 conferme nell'export 10:53-11:53 UTC) e `STALE_FENCE`. Misura offerta→conferma e hold→commit dopo la 1.0.14; porta il minimo a ~18 ore aggiornando le fixture. | export falliti, `tools/misura_latenze.js` | PR con test, numeri prima/dopo |
+| Andrei | Ospedale: le 15 "conferme senza ricevuta" dell'export 10:53-11:53 UTC: per ognuna, dove si ferma `confirm → hold → held → commit → ricevuta` e con che codice. Più: alla prossima ondata (ogni ~20 min, 11:31 e 11:51) conta i cittadini senza risposta di CUP e GP con concorrenza 32. | export, log `care.hold`, console | tabella in `PROBLEMS.md`, proposta |
+| Abed | CUP: dopo la 1.0.27 (senza #119, 12:07 UTC) rapporto rifiuti `deadline` per offerta (prima 0,45, con #119 0,90). Verifica `_true_deadline` (`_TO_CUP` 21 ore) sui percorsi con il primo messaggio e la riga di rifiuto. Partner: con P2 in vigore, cosa rispondono (log `cup.partner_reply`), se leggono `earliest`/`deadline` MACH-1.4. | console, log del CUP | numeri, eventuale PR con test |
+| Ettore | Monitoraggio ogni 20 minuti fino alle 16:00: percorsi nati dopo le 12:10 UTC per stato e categoria (GP muto, CUP muto, nessuna offerta, offerte rifiutate per motivo, conferma senza ricevuta, ricevuta), con need_id di esempio. Più pitch e vision 2027 pronti per la finale. | `scarica-falliti.user.js`, console | tabella nel gruppo ogni 20 min |
+
 ## Fase 5 (dalle 01:30 del 21/11) — capo: Ismail. Deploy: solo Claude sul PC di Ismail
 
 Livello 5 «Vincoli combinati»: priorità, lingue e disponibilità si sovrappongono. Online: CUP 1.0.8, GP 1.0.3, consultorio 1.0.1, specialist 1.0.2, ospedale 1.0.0.
