@@ -1,5 +1,20 @@
 # Journal (la voce più recente in alto)
 
+## 2026-11-21 03:25 — Andrei (Claude) — Scadenze in giorni di agenda (CUP e ospedale)
+
+**Fatto**
+- Il kit (e19-rules.md, ADR-124): sabato e domenica di agenda non esistono, dopo il venerdì si riparte dal lunedì. B = 2 giorni di agenda, D = 5. Il codice (dall'esempio del kit, quindi probabilmente in tutte le squadre) usava `now + timedelta(days=N)`: di giovedì B finiva sabato e scartava ogni slot di lunedì; di venerdì non restava quasi niente.
+- Effetto: fisiatria B in inglese (solo h1, lun-mer) di giovedì/venerdì senza nessuno slot "in finestra", il CUP offriva lunedì come `relaxed=true` mescolato a slot oltre la scadenza, rifiutati con `reason=deadline`. Il verdetto contava `S` 20-47: i percorsi falliti della causa 1 in PROBLEMS.
+- Correzione: `_agenda_horizon(now, days)` conta solo i giorni feriali; usata nel CUP (`fitting`, offerte dei partner) e nell'ospedale (`fitting`, risposte alle ricerche dei CUP).
+- Test: `tools/test_cup_scadenze.py` (nuovo, 3 casi falliscono su main, controllo di metà settimana invariato) e prova I in `tools/test_facility.py`. Verdi anche test_cup_l5_vincoli, test_cup_medici, test_cup_recovery, test_fix e le prove dell'ospedale.
+
+**Problemi**
+- Consultorio e specialist hanno lo stesso calcolo (proprietari Hapca e Ismail): avvisati.
+- Il giudice conta la scadenza così? Il kit lo dice; da verificare in console sui prossimi B di giovedì/venerdì.
+
+**Prossimo passo**
+- Deploy CUP e ospedale, poi guardare in console percorsi B di fine settimana.
+
 ## 2026-11-21 03:20 — Andrei (Claude) — Ospedale: livelli 6, 7 e 8 portati dal consultorio
 
 **Fatto**

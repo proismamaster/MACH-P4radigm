@@ -613,6 +613,31 @@ async def prova_h() -> None:
           len(h.out(LEDGER, "hold")) == 1 and len(h.out(CUP_OWN, "booking.receipt")) == 1, h)
 
 
+async def prova_i() -> None:
+    """Scadenze in giorni di AGENDA (kit, ADR-124: sabato e domenica non esistono).
+
+    Un CUP di un'altra ASST cerca fisiatria B di giovedi': la scadenza arriva a lunedi'. Con i
+    giorni di calendario l'ospedale scartava ogni slot di lunedi' e rispondeva no_slots."""
+
+    print("Prova I - scadenze in giorni di agenda (giovedi' + 2 = lunedi')")
+
+    class Thursday(World):
+        def answer(self, text: str) -> str | None:
+            if text.split()[0] == "agenda":
+                return "agenda agenda_now=2026-11-19T08:00:00+01:00"
+            return super().answer(text)
+
+    rows = [
+        "slot_id=M-1 doctor_id=D-x1 facility=ME procedure=VIS-FIS at=2026-11-23T07:00:00+01:00 day=mon free=1",
+        "slot_id=T-1 doctor_id=D-x1 facility=ME procedure=VIS-FIS at=2026-11-24T09:00:00+01:00 day=tue free=1",
+    ]
+    h = Harness("hospital.physiatry", HOSP, Thursday(HOSP, {"VIS-FIS:1": slots_reply(HOSP, rows)}))
+    await h.turn(CUP_EXT, SEARCH)
+    body = " ".join(h.out(CUP_EXT, "offer"))
+    check("B di giovedi': offre lo slot di lunedi' (M-1), non quello di martedi' (T-1)",
+          "slot_id=M-1" in body and "slot_id=T-1" not in body and not h.out(CUP_EXT, "cancel"), h)
+
+
 async def run() -> None:
     await prova_a()
     await prova_b()
@@ -621,6 +646,7 @@ async def run() -> None:
     await prova_e()
     await prova_f()
     await prova_g()
+    await prova_i()
     await prova_h()
     print(f"\n{'TUTTO OK' if not FAILS else str(len(FAILS)) + ' FALLITE'}")
     sys.exit(1 if FAILS else 0)

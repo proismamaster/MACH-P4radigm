@@ -58,6 +58,20 @@ _RED_FLAGS = (
     "chest pain",
 )
 _DEADLINE_DAYS = {"B": 2, "D": 5}
+
+
+def _agenda_horizon(now: datetime, days: int) -> datetime:
+    """``now`` plus ``days`` days of AGENDA. Saturday and Sunday do not exist in the agenda: after
+    Friday it goes on from Monday (kit, ADR-124). B on a Thursday ends on Monday, not on Saturday:
+    calendar days dropped every Monday slot and left Thursday and Friday cases with nothing."""
+
+    at = now
+    left = days
+    while left > 0:
+        at += timedelta(days=1)
+        if at.weekday() < 5:
+            left -= 1
+    return at
 _RX = re.compile(r"^prescription_number-[A-Z0-9-]{4,40}$")
 _LOG = logging.getLogger("care")
 _LOGGED_REPLIES: set[str] = set()
@@ -387,7 +401,7 @@ def fitting(
     elif priority == "U":
         horizon = now.replace(hour=23, minute=59, second=59, microsecond=0)
     else:
-        horizon = now + timedelta(days=_DEADLINE_DAYS.get(priority or "", 14))
+        horizon = _agenda_horizon(now, _DEADLINE_DAYS.get(priority or "", 14))
     earliest = now + _LEAD
     chosen: list[tuple[datetime, dict[str, str]]] = []
     for line in lines:
@@ -1102,7 +1116,7 @@ def _cup_partner_slots(
     if priority == "U":
         horizon = now.replace(hour=23, minute=59, second=59, microsecond=0)
     else:
-        horizon = now + timedelta(days=_DEADLINE_DAYS[priority])
+        horizon = _agenda_horizon(now, _DEADLINE_DAYS[priority])
     earliest = now + _LEAD
     for row in chat:
         request_id = searches.get(row.sender)
