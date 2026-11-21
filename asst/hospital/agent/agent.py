@@ -716,15 +716,25 @@ def _remember_reads(chat: list[Message]) -> None:
             _LEDGER_READS[key] = (row, monotonic())
 
 
-def _with_reads(chat: list[Message], procedure: str) -> list[Message]:
-    """``chat`` with the remembered agenda and slot page in front, when the case lacks them and they are
-    recent. The case's own rows come later and win; _agenda_now extrapolates from the row's sent_at."""
-    extra = []
-    for key, missing in (("agenda", not _has_agenda(chat)), (procedure, _latest_slots_for(chat, procedure) is None)):
-        seen = _LEDGER_READS.get(key)
-        if missing and seen is not None and monotonic() - seen[1] <= _READS_FRESH:
-            extra.append(seen[0])
-    return [*extra, *chat] if extra else chat
+_READS_RENEW = 60.0  # a remembered page older than this is asked again while the search is answered
+_RENEWED: dict[str, float] = {}  # procedure -> when its page was last asked again (at most every 30 s)
+
+
+def _with_reads(chat: list[Message], procedure: str) -> tuple[list[Message], bool]:
+    """``chat`` with the remembered agenda and slot page in front, when the case lacks them, and whether the
+    page should be asked again. The agenda is extrapolated from its sent_at, so an old one still tells the
+    time; a slot page is used for _READS_FRESH seconds. The case's own rows come later and win."""
+    extra, renew = [], False
+    agenda = _LEDGER_READS.get("agenda")
+    if not _has_agenda(chat) and agenda is not None:
+        extra.append(agenda[0])
+    page = _LEDGER_READS.get(procedure)
+    if _latest_slots_for(chat, procedure) is None and page is not None:
+        age = monotonic() - page[1]
+        if age <= _READS_FRESH:
+            extra.append(page[0])
+        renew = age > _READS_RENEW and monotonic() - _RENEWED.get(procedure, -1e9) > 30.0
+    return ([*extra, *chat] if extra else chat), renew
 
 
 def _hold_open(chat: list[Message], agent: str, slot: str) -> bool:
@@ -1394,8 +1404,22 @@ async def _on_refused(
         await _advance(city, message, chat, fixed="CONS-GIN", replacing=True)
 
 
+def _case_booking(chat: list[Message], ledger_ref: str = "") -> str:
+    """The booking of this case from the Ledger's committed line (the one with ``ledger_ref`` if given)."""
+    found = ""
+    for row in chat:
+        if row.sender == LEDGER and first_word(row.text) == "committed":
+            fields = fields_of(row.text)
+            if not ledger_ref or fields.get("ledger_ref") == ledger_ref:
+                found = fields.get("booking_id", found)
+    return found
+
+
 async def _on_checkin(city: City, message: Message, chat: list[Message], *, reports: bool) -> None:
-    booking_id = fields_of(message.text).get("booking_id", "")
+    fields = fields_of(message.text)
+    # A check-in without booking_id (only ledger_ref, or words around it) was dropped in silence: a valid
+    # receipt refused is -2, a check-in honoured +2. The case history has the booking.
+    booking_id = fields.get("booking_id", "") or _case_booking(chat, fields.get("ledger_ref", ""))
     citizen = message.sender if message.sender.startswith("citizen:") else _citizen(chat)
     if not booking_id or not citizen:
         return
@@ -1792,7 +1816,10 @@ async def _answer_search(
         return
     priority = (fields.get("priority") or "").upper() or None
 
-    chat = _with_reads(chat, procedure)
+    chat, renew = _with_reads(chat, procedure)
+    if renew:
+        _RENEWED[procedure] = monotonic()
+        await _say(city, LEDGER, f"world procedure={procedure} page=1")  # no wait: a later turn remembers it
     world = _latest_slots_for(chat, procedure)
     now = _agenda_now(chat)
     if world is None or now is None:

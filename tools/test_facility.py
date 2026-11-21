@@ -1023,6 +1023,43 @@ async def prova_q() -> None:
           len(h.out(LEDGER, "checkin")) == 1 and len(h.out(CIT, "checkin")) == 1, h)
 
 
+async def prova_r() -> None:
+    """Ospedale 1.0.9. (1) La copia di agenda e pagina scade dopo 120 s senza letture: la prima ricerca di un
+    partner tornava lenta. L'agenda si estrapola (vale anche vecchia); la pagina, se ha piu' di 60 s, si
+    rinnova chiedendola al Ledger mentre si risponde. (2) Check-in del cittadino senza booking_id: l'ospedale
+    lo scartava in silenzio (ricevuta valida rifiutata -2, check-in onorato +2 perso)."""
+
+    print("Prova R - copia di agenda e pagina rinnovata, check-in senza booking_id")
+    h = Harness("hospital.physiatry", HOSP, World(HOSP, {"VIS-FIS:1": slots_reply(HOSP, ROWS)}), need="N-2026-11-21-00R1")
+    await h.turn(CUP_EXT, SEARCH.replace("rq-T1", "rq-R1"))
+    reads = h.mod._LEDGER_READS
+    for key, age in (("agenda", 3600.0), ("VIS-FIS", 70.0)):
+        row, seen = reads[key]
+        reads[key] = (row, seen - age)
+    h.need, h.world = "N-2026-11-21-00R2", Silent(HOSP)
+    before = h.out(LEDGER)
+    other = "agent:t09/booking_centre"
+    await h.turn(other, SEARCH.replace("rq-T1", "rq-R2"))
+    sent = h.out(LEDGER)[len(before):]
+    check("agenda di un'ora fa e pagina di 70 s: offerte subito e una sola richiesta di world per rinnovare",
+          "slot_id=S-1" in " ".join(h.out(other, "offer")) and [t.split()[0] for t in sent] == ["world"], h)
+
+    h = Harness("hospital.physiatry", HOSP, World(HOSP))
+    for sender, recipient, text in (
+        (CUP_OWN, HOSP, f"confirm offer_id=of-r-1 slot_id=S-1 citizen={CIT} consent_ref=cons-N-booking facility={HOSP}"),
+        (HOSP, LEDGER, "hold slot_id=S-1 consent_ref=cons-N-booking"),
+        (LEDGER, HOSP, "held hold_id=H-5 slot_id=S-1 fence=1"),
+        (HOSP, LEDGER, "commit hold_id=H-5 consent_ref=cons-N-booking fence=1"),
+        (LEDGER, HOSP, "committed booking_id=H-5 ledger_ref=LR-5"),
+        (HOSP, CUP_OWN, "booking.receipt booking_id=H-5 ledger_ref=LR-5 offer_id=of-r-1 slot_id=S-1"),
+    ):
+        h.port.log.append(Message(type="chat", sender=sender, recipient=recipient, msg_id=uuid4().hex,
+                                  need_id=h.need, conversation_id="c-1", body={"text": text}))
+    await h.turn(CIT, "checkin ledger_ref=LR-5 Sono arrivato per la visita.")
+    check("checkin con il solo ledger_ref: checkin al Ledger con il booking_id del caso e conferma al cittadino",
+          any("booking_id=H-5" in t.split() for t in h.out(LEDGER, "checkin")) and len(h.out(CIT, "checkin")) == 1, h)
+
+
 async def run() -> None:
     # Ogni agente ha le sue prove: A, B, D, F, G, I-N e P provano l'ospedale, C e O il consultorio; E e H valgono per tutti.
     if "family_counseling" in os.path.normpath(AGENT_FILE).split(os.sep):
@@ -1042,6 +1079,7 @@ async def run() -> None:
         await prova_n()
         await prova_p()
         await prova_q()
+        await prova_r()
     await prova_e()
     await prova_h()
     print(f"\n{'TUTTO OK' if not FAILS else str(len(FAILS)) + ' FALLITE'}")
