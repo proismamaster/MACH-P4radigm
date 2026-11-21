@@ -22,6 +22,34 @@ def mix(offers):
 
 
 class VarietyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_physiotherapy_pain_prose_then_gender_refusal(self):
+        box = base.Mailbox("physio-pain", "D", [
+            base.slot("first", "h1", "24T10:30", "tue"),
+        ])
+        request = box.add(
+            base.CITIZEN,
+            "raga, lowkey mi fa un male cane il ginocchio, tipo volevo prenotare una visita "
+            "ma posso solo in certi giorni, fr. need.request area={'district':_4} lang=it "
+            f"prescription_number={base.RX} service_type=hospital.physiatry",
+        )
+        await box.turn(request)
+        (first,) = [offer for row in box.sent for offer in base.cup._offer_blocks(row.text)]
+        self.assertEqual(first["doctor_id"], "h1")
+
+        # Case 3530004 ended at the refusal in the export. Simulate a refreshed agenda.
+        box.add(base.LEDGER, "slots page=1/1\n"
+                + base.slot("later", "h2", "25T14:00", "wed"))
+        sent_before_refusal = len(box.sent)
+        refusal = box.add(
+            base.CITIZEN,
+            "raga, lowkey il ginocchio mi fa un po' male, tipo riesco solo in certi giorni, boh "
+            f"\U0001f6b6\u200d\u2640\ufe0f cancel offer_id={first['offer_id']} reason=gender",
+        )
+        await box.turn(refusal)
+        offers = [offer for row in box.sent[sent_before_refusal:]
+                  for offer in base.cup._offer_blocks(row.text)]
+        self.assertEqual([(offer["slot_id"], offer["doctor_id"]) for offer in offers], [("later", "h2")])
+
     async def test_both_genders_when_later_days_are_all_male(self):
         box = base.Mailbox("mix-gender", "D", [
             base.slot("wed-m", "h2", "25T10:30", "wed"),

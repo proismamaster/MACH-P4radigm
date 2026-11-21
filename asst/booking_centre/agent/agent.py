@@ -831,7 +831,7 @@ class _Sent:
 
     __slots__ = (
         "offers", "trigger", "again", "outbox", "uncertain_confirmation", "partner_search_started", "stale_reads",
-        "paging_started", "confirm_sent_at", "confirm_resent",
+        "partner_search_retried", "paging_started", "confirm_sent_at", "confirm_resent",
     )
 
     def __init__(self) -> None:
@@ -841,6 +841,7 @@ class _Sent:
         self.outbox: deque[tuple[Message, str]] = deque(maxlen=16)
         self.uncertain_confirmation = False
         self.partner_search_started: float | None = None
+        self.partner_search_retried = False
         # Ledger agenda/slots answers read before a P1 renewal: stale once the renewal is asked.
         self.stale_reads: set[str] = set()
         self.paging_started: float | None = None
@@ -1452,8 +1453,29 @@ async def _cup_cross_asst(
     *, replacing: bool, relaxed: list[dict[str, str]] | None = None,
 ) -> None:
     service = _CUP_SERVICES[procedure]
-    searches = _cup_searches(chat, city.agent_id)
-    started_here = not searches and cache.partner_search_started is None
+    agent = city.agent_id
+    first_notice = _no_slots_text("", "no_slots")
+    retry_notice = _no_slots_text("", "no_slots", rechecked=True)
+    after_notice = next((chat[index + 1:] for index, row in enumerate(chat)
+                         if row.sender == agent and row.recipient == citizen and row.text.endswith(first_notice)), None)
+    new_searches = _cup_searches(after_notice or [], agent)
+    rechecked = cache.partner_search_retried or bool(new_searches) or any(
+        row.sender == agent and row.recipient == citizen and row.text.endswith(retry_notice)
+        for row in after_notice or []
+    )
+    # The citizen can repeat the request after we offered to check again. The saved no-slots
+    # message separates the two search rounds even after a restart; replies keep their own IDs.
+    inbound = city.inbound
+    retry_here = (
+        not rechecked and after_notice is not None and inbound is not None and inbound.sender == citizen
+        and (inbound.type == "need.request" or "need.request" in words(inbound.text))
+        and _cup_input(inbound)[1].get("prescription_number") == number
+        and any(row.msg_id == inbound.msg_id for row in after_notice)
+    )
+    if retry_here:
+        cache.partner_search_retried = rechecked = True
+    searches = new_searches if rechecked else _cup_searches(chat, agent)
+    started_here = retry_here or (after_notice is None and not searches and cache.partner_search_started is None)
     if started_here:
         cache.partner_search_started = monotonic()
         try:
@@ -1525,20 +1547,23 @@ async def _cup_cross_asst(
         )
         return
     reason = "partner_unavailable" if pending else "no_slots"
-    notice = _no_slots_text(next(iter(_cup_case(chat, city.agent_id, citizen).offers), ""), reason)
-    said = any(_we(chat, city.agent_id, f"reason={code}", to=citizen, word="cancel")
+    notice = _no_slots_text(next(iter(_cup_case(chat, agent, citizen).offers), ""), reason, rechecked=rechecked)
+    search_history = (after_notice or []) if rechecked else chat
+    said = any(_we(search_history, agent, f"reason={code}", to=citizen, word="cancel")
                for code in ("partner_unavailable", "no_slots"))
-    if not said and not _exact(chat, city.agent_id, notice):
+    if not said and not _exact(search_history, agent, notice):
         await _cup_send(city, message, cache, citizen, notice)
 
 
-def _no_slots_text(open_offer: str, reason: str) -> str:
+def _no_slots_text(open_offer: str, reason: str, *, rechecked: bool = False) -> str:
     """No slot to propose. A cancel always names the offer it cancels (without it the citizen asks
     "Which offer_id?"); with no offer open it is a plain sentence with no act word."""
     sentence = (
         "Non ho trovato orari confermabili entro i tempi della sua priorità. "
         "Se può indicarmi altri giorni o orari che le vanno bene, riprovo subito."
     )
+    if rechecked:
+        sentence = "Al secondo controllo non ho ricevuto disponibilità confermabili entro i tempi della sua priorità."
     return f"cancel offer_id={open_offer} reason={reason} {sentence}" if open_offer else sentence
 
 
