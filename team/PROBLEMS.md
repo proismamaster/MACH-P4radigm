@@ -19,6 +19,10 @@
 - **Offerte sostitutive dopo `cancel past`**: `…3760002` cancel 11:13:41, pagina 2 chiesta nello stesso secondo; `…3290006` cancel EXPIRED 11:05:23, pagina 2 alle 11:11:22, offerte al cittadino alle 11:18:17. Funzionano; il ritardo viene dal Ledger (5-6 minuti) e dal push (1-6 minuti).
 - **Caso con la ricerca di un CUP nello stesso `need_id`**: in `…3810002` l'`agent:yr8hjc5q7n98` ha mandato un `need.request` alle 11:09:34. Da quel momento `_family` mandava le risposte del Ledger solo alla ricerca e il desk del cittadino non completava mai le offerte sostitutive.
 - Correzione sul branch `hapca/consultorio-stato-dalla-cronologia` (`_reacted_since`, `_cancelled_for`, `_owed`, `_resume_owed`, riprova solo con un hold precedente): non pubblicata, aspetta l'OK al rilascio. Prova: `tools/test_consultorio_ledger_lento.py`, funzione `cambio_di_pod`.
+## CUP: ricerche ai partner e alternative dopo un rifiuto per scadenza (21/11)
+
+- La #86 filtrava i nuovi risultati dell'Index. Il test dimostra che la lista del ring e i partner appresi potevano riportare nella ricerca una struttura con un ruolo o un servizio incompatibile. Il CUP applica la stessa esclusione alla lista finale.
+- Il caso 3130005 mostra tre rifiuti per scadenza. Con una pagina di slot simulata, il CUP poteva poi offrire una data già oltre il termine della pratica, perché la ricerca locale di alternative ricalcolava la finestra dal momento della risposta. Ora il primo tentativo di alternativa usa il termine della pratica.
 
 ## Verifica della 1.0.12 in sola lettura (21/11, messaggi fino alle 10:56 UTC)
 

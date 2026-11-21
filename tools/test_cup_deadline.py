@@ -84,6 +84,36 @@ class DeadlineTests(unittest.IsolatedAsyncioTestCase):
                  for o in cup._offer_blocks(row.text)]
         self.assertEqual(later, [], "rifiutate per deadline, le date oltre il termine non si riproppongono")
 
+    async def test_after_deadline_refusal_use_prescription_window_for_alternatives(self):
+        # Case 3130005 supplied the citizen's wording. Simulate the clock and catalogue.
+        first = base.slot("first", "h1", "24T10:00", "tue")
+        late = base.slot("late", "h2", "25T10:00", "wed")
+        box = Run("prescription-window", "B", [first])
+        request = box.add(
+            base.CITIZEN,
+            "Salve, ho un dolore alla schiena che mi preoccupa un po'. Vorrei fissare una visita, "
+            "mi potete aiutare? need.request area={'district':_4} lang=it "
+            f"prescription_number={base.RX} service_type=hospital.physiatry",
+        )
+        deadline = cup._when("2026-11-24T12:00:00Z")
+        with patch.object(cup, "_true_deadline", return_value=deadline):
+            await box.turn(request)
+            (original,) = [offer for text in box.to_citizen() for offer in cup._offer_blocks(text)]
+            self.assertEqual(original["slot_id"], "first")
+            self.assertNotIn("relaxed", original)
+            box.add(base.LEDGER, f"slots page=1/1\n{late}")
+            refusal = box.add(
+                base.CITIZEN,
+                "Mi dispiace tanto, ma per questa data ho già un altro impegno. Riuscirebbe a "
+                f"propormi un'alternativa? cancel offer_id={original['offer_id']} reason=deadline",
+            )
+            before = len(box.to_citizen())
+            await box.turn(refusal)
+
+        messages = box.to_citizen()[before:]
+        self.assertTrue(messages)
+        self.assertEqual([offer["slot_id"] for text in messages for offer in cup._offer_blocks(text)], [])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

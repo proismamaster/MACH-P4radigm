@@ -557,16 +557,39 @@ async def _gp(city: City, message: Message, chat: list[Message], *, urgent: bool
         if not await _gp_send(city, message, LEDGER, text):
             return
         command = fields_of(text)
-        chat = await _until(
-            city, message.need_id, chat,
-            lambda rows: _gp_ledger_rx(rows, number, heads={"prescribed", "refused"}) is not None,
-            max_polls=24,
-        )
+        chat = await _gp_wait_rx(city, message.need_id, chat, number)
         chat = _gp_case(chat, message)
 
     if code and command.get("symptom_code") != code:
         return
     await _gp_announce(city, message, chat, citizen, command)
+
+
+# The Ledger's `prescribed` lands in the case history as soon as the Relay accepts it, but the push that
+# would open our next turn comes 60-90 s later or not at all (405, 21/11 11:13 UTC: prescription on the
+# Ledger, never announced, the citizen never reached the CUP). After `prescribe` the turn reads the
+# history once a second for up to _RX_WAIT seconds (the hospital waits 180 s the same way).
+_RX_WAIT = 90.0
+_RX_STEP = 1.0
+
+
+async def _gp_wait_rx(city: City, need_id: str | None, chat: list[Message], number: str) -> list[Message]:
+    """Bounded by real time (a slow history read must not stretch the turn) and by 3 errors in a row."""
+    fresh, errors, started, first = chat, 0, monotonic(), True
+    while first or monotonic() - started < _RX_WAIT:
+        first = False
+        try:
+            fresh = await city.history(need_id=need_id)
+            errors = 0
+        except CapError:
+            errors += 1
+            if errors >= 3:
+                break
+        if _gp_ledger_rx(fresh, number, heads={"prescribed", "refused"}) is not None:
+            return fresh
+        await asyncio.sleep(_RX_STEP)
+    _LOG.warning("gp.prescribed.late need=%s rx=%s", need_id, number[-8:])
+    return fresh
 
 
 async def _gp_announce(
