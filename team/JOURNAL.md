@@ -1,5 +1,28 @@
 # Journal (la voce più recente in alto)
 
+## 2026-11-21 08:40 — Alberto (Hhapca, con Claude) — Tutto quello fatto da solo (04:30-08:40)
+
+**Fatto** (in ordine; tutto su `main`, test verdi a ogni passo)
+- 05:30 `4c92cb8` → **CUP 1.0.23 online** (05:32): scadenza B/D dalla nascita del need (messaggio al CUP − 21 ore: il cittadino scrive al CUP 19,5-20,6 minuti dopo il primo messaggio al medico, 17 percorsi); B senza la preferenza a 30 ore (oltre la scadenza vera); date dei partner inoltrate in UTC con la Z (audit `false_attribute -2` in 293, 134, 191); giorni abbreviati (`lun/mer/ven`, 288).
+- 05:41 `225c3c1` → **GP 1.0.4 online** (05:43): red flag del livello 8 scritte in altro modo (fitta al petto, dolore toracico, non sento più le gambe, pain in my chest...); red flag del `world` riconosciute con due terzi delle parole; il GP non prescrive senza aver letto il `world`.
+- 05:48 `city scale booking_centre|gp --min 1 --max 1 --concurrency 8` (approvato). Misurato dopo: nessun effetto sui tempi (il collo di bottiglia è il Ledger, non il pod).
+- 05:57 `b5dcb99`: MACH-1.3 nelle strutture. Consultorio e ospedale rispettano `earliest=`/`after=`/`deadline=` con data e ora; l'ospedale per B e U offre il primo slot dopo il minimo (niente preferenza a 24 ore); consultorio con orologio d'agenda estrapolato e regola R7 (al confirm uno slot passato → `cancel reason=past` + nuove offerte); il CUP manda `mach=1.3 earliest= deadline=` nelle ricerche ai partner.
+- 06:03 `e2d1518`: anticipo minimo 10 ore d'agenda (U 4) in CUP e consultorio, margine di 1 ora al confirm. Scelto con `tools/sim_percorsi.py`, che rigioca 21 percorsi veri: 19/21 prenotati invece di 14/21 con 4 minuti di latenza.
+- 06:15 misura in console (messaggi degli agenti, `/v1/team/agents/<id>/messages`): **il Ledger risponde in 7-9 minuti** a CUP, GP e consultorio, e la risposta apre il nostro turno 6-7 minuti dopo. Il GP aspettava il `world` a ogni ricetta (84 su 84 senza protocolli né red flag); il CUP faceva 2-4 giri prima di offrire e scriveva a 25 partner per caso (550 ricerche in 26 minuti, 1 offerta utile). Dettagli in `team/PROBLEMS.md` e `team/REVISIONE.md`.
+- 06:31 `f72ce63`: world, agenda e pagine del catalogo condivisi per ondata (GP 10 minuti, CUP e consultorio 5), ricetta + agenda + pagina 1 nello stesso turno, pagine mancanti 6 alla volta, al massimo 6 partner (prima quelli che offrono), niente attese nei turni aperti dalle risposte dei partner. Nuovo `tools/test_cup_ritardo.py`.
+- 08:29 **GP 1.0.5 online** (OK di Alberto durante il freeze, per il ritardo del Ledger). Card a 1.0.6 (`e439bcb`).
+- CUP e consultorio **non** pubblicati: restano per il deploy delle 10:00 di Andrei (PROJECT.md delle 08:30).
+
+**Problemi**
+- Con 6-9 minuti per passaggio una B (48 ore) entra a fatica anche con le correzioni: hold → commit restano due giri obbligati.
+- Conformance locale: fallisce solo `custody.ack`, come per l'agente di riferimento del kit; la conferma vera è al deploy (il GP 1.0.5 l'ha passata).
+- `tools/test_facility.py` non vale per lo specialist (48 fallite su un file non toccato).
+
+**Prossimo passo**
+- 10:00 (Andrei): CUP 1.0.24 + #86, ospedale 1.0.5, consultorio 1.0.9. GP no.
+- 10:15: in console tempo cittadino → ricetta (GP) e `need.request` → prima offerta (CUP), ricerche ai partner per caso (≤ 6), `past`/`EXPIRED`, ricevute.
+- Riga `facts` MACH-1.3 per ospedale, specialist e consultorio su Discord.
+
 ## 2026-11-21 06:35 — Alberto (Hhapca, con Claude) — Ritardo del Ledger: meno passaggi in GP, CUP e consultorio
 - Misurato in console (04:43-05:15 UTC, messaggi degli agenti): il Ledger risponde 7-9 minuti dopo la richiesta e la risposta apre il nostro turno 6-7 minuti dopo, per CUP, GP e consultorio. Iniziato verso le 04:10 UTC. Lo scale a concorrenza 8 non ha cambiato niente.
 - Il GP aspettava il `world` prima di ogni ricetta: 84 `world` su 84 senza protocolli né red flag. Il CUP faceva 2-4 giri di Ledger prima di offrire e mandava 25 ricerche ai partner per caso (550 in 26 minuti, 1 offerta utile).

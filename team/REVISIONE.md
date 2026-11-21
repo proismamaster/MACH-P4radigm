@@ -1,6 +1,6 @@
-# Revisione del codice — 21/11 ore 06:35 (Alberto, con Claude)
+# Revisione del codice — 21/11 ore 06:35, aggiornata alle 08:40 (Alberto, con Claude)
 
-Base: `main` a f72ce63. Online: CUP 1.0.23, GP 1.0.4, consultorio 1.0.8, ospedale 1.0.4, specialist 1.0.4 (le correzioni di e2d1518 e f72ce63 non sono ancora pubblicate).
+Base: `main` a f72ce63. Online: CUP 1.0.23, **GP 1.0.5 (08:29, contiene f72ce63)**, consultorio 1.0.8, ospedale 1.0.4, specialist 1.0.4. CUP 1.0.24, ospedale 1.0.5 e consultorio 1.0.9 alle 10:00 (Andrei).
 Fonte dei fatti: percorsi di `/v1/team/journeys/<need_id>`, messaggi di CUP, GP e consultorio da `/v1/team/agents/<id>/messages` (21/11 04:18-05:15 UTC), scoreboard, test in `tools/`, protocollo MACH-1.3.
 
 Legenda: ✅ gestito e provato (test o console) · 🟡 gestito ma non provato in Arena · ❌ non gestito / bug noto.
@@ -24,7 +24,7 @@ Sprechi nostri, confermati:
 - **CUP → partner**: 550 ricerche in 26 minuti (22 × 25 partner), ~500 risposte (315 `no_availability`, 99 "Ricevuto"), ognuna un turno con fino a 7 letture della cronologia. 45 offerte da 7 partner, 1 arrivata a un cittadino, 0 confirm ai partner.
 - Lo scale a concorrenza 8 (05:48) non ha cambiato i tempi: il collo di bottiglia non era il pod.
 
-## 2. Correzioni in `main` (da pubblicare)
+## 2. Correzioni in `main` (GP online dalle 08:29, il resto alle 10:00)
 
 | Commit | Agente | Cosa | Effetto stimato con il ritardo di oggi |
 |---|---|---|---|
@@ -57,8 +57,8 @@ Rischi noti delle correzioni:
 - L'effetto reale delle correzioni: si vede solo dopo il deploy.
 
 ## 5. Piano
-1. Deploy di GP, CUP e consultorio (serve il tuo OK; il freeze del team va dalle 06:00 alle 10:00).
-2. Subito dopo: misurare in console il tempo citizen → ricetta (GP) e need.request → prima offerta (CUP), e il numero di ricerche ai partner.
-3. #86 di Andrei (impostori del CUP) alle 10:00.
+1. ✅ GP 1.0.5 online alle 08:29 (OK di Alberto). Alle 10:00 Andrei pubblica CUP 1.0.24 + #86, ospedale 1.0.5, consultorio 1.0.9, uno al minuto; il GP non serve.
+2. Dalle 10:15: misurare in console il tempo cittadino → ricetta (GP) e need.request → prima offerta (CUP), il numero di ricerche ai partner per caso, `past`/`EXPIRED` e ricevute.
+3. Cercare in console un verdetto di cardiologia con le righe dello specialist (per il follow-up).
 4. Riga `facts` MACH-1.3 per ospedale, specialist e consultorio su Discord.
 5. Se resta tempo: la stessa lettura condivisa nell'ospedale.

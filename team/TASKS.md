@@ -40,9 +40,23 @@ Livello 5 «Vincoli combinati»: priorità, lingue e disponibilità si sovrappon
 | Compito | Stato | Branch / PR |
 |---|---|---|
 | Consultorio: L6-L8, trust ring (modalità sicura), conformance, riprova del hold, scadenze in giorni di agenda | online 1.0.7, in `main` | `hapca/consultorio-riprova-hold`, `hapca/trust-ring` |
-| CUP: orologio, paging, anticipo minimo, cancel con id, rifiuti day/gender | in `main`, da pubblicare (04:30-05:00) | `hapca/cup-orologio`, `-pagine`, `-lead`, `-deadline`, `-rifiuti-day-gender` |
+| CUP: orologio, paging, anticipo minimo, cancel con id, rifiuti day/gender | online (CUP 1.0.21-1.0.23) | `hapca/cup-orologio`, `-pagine`, `-lead`, `-deadline`, `-rifiuti-day-gender` |
 | CUP: impostori (#86) | da unire e pubblicare alle 10:00 | `andrei/cup-impostori` |
 | Ospedale e specialist: riprova su `EXPIRED`/`STALE_FENCE` | solo se i messaggi del Ledger lo confermano | — |
+
+## Da solo (21/11 04:30-08:40) — Alberto con Claude, su tutti gli agenti
+
+| Compito | Stato | Commit |
+|---|---|---|
+| CUP: scadenza dalla nascita del need, B senza preferenza 30 ore, date dei partner in UTC, giorni abbreviati | online 1.0.23 (05:32) | `4c92cb8` |
+| GP: red flag del livello 8 parafrasate e del `world` con 2/3 delle parole | online 1.0.4 (05:43) | `225c3c1` |
+| Scale di CUP e GP a concorrenza 8 | fatto alle 05:48, nessun effetto misurato | — |
+| MACH-1.3: finestra `earliest=`/`deadline=` in consultorio e ospedale, R7 al confirm, token nelle ricerche del CUP | in `main`, alle 10:00 (ospedale 1.0.5, consultorio 1.0.9, CUP 1.0.24) | `b5dcb99` |
+| Anticipo minimo 10 ore (U 4), margine 1 ora al confirm, simulazione dei percorsi | in `main`, alle 10:00 | `e2d1518` |
+| Ritardo del Ledger: letture condivise per ondata, richieste in parallelo, al massimo 6 partner | GP online 1.0.5 (08:29); CUP e consultorio alle 10:00 | `f72ce63` |
+| Console dalle 10:15: tempi GP e CUP, ricerche ai partner, `past`/`EXPIRED`, ricevute | da fare | — |
+| Verdetto di cardiologia con le righe dello specialist (per il follow-up) | da cercare in console | — |
+| Riga `facts` MACH-1.3 per le nostre strutture su Discord | Alberto | — |
 
 ## Deploy
 
