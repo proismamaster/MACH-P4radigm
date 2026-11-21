@@ -1500,7 +1500,7 @@ async def _cup_cross_asst(
     # Only the turn that sent the searches waits for replies: every reply opens its own turn, and a
     # reply turn that polls holds the need's lock while the other replies queue behind it.
     remaining = _CUP_PARTNER_REPLY_SECONDS - (monotonic() - cache.partner_search_started)
-    if started_here and remaining > 0 and searches.keys() - answered:
+    if started_here and searches.keys() - answered and remaining > 0:
         def received_all(rows: list[Message]) -> bool:
             nonlocal offers, answered
             if rows is not chat:
