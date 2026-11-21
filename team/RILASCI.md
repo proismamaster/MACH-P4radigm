@@ -13,12 +13,12 @@ Chi rilascia aggiunge la riga **subito dopo** `city deploy` / `city rollback`, n
 
 ## Online ora
 
-Controllato con `city --json status` alle 10:48 UTC.
+Controllato con `city --json status` alle 11:20 UTC.
 
 | Agente | ID | Versione | Dalle (UTC) | Deployment | Rollback a |
 |---|---|---|---|---|---|
 | gp | `agent:rng5wcrzvhsj` | 1.0.5 | 07:29 | — | 1.0.4 |
-| booking_centre | `agent:ez8cb7j167p2` | 1.0.25 | 10:45 | `dep-a6068797fa384615b5a08394f110fb2b` | 1.0.24 |
+| booking_centre | `agent:ez8cb7j167p2` | 1.0.26 (secondo build) | 11:18 | `dep-77ea4b5b7cd34d45b8281d7656f315fd` | 1.0.26 di Ismail (`dep-e2aca534…`, solo #119) o 1.0.25 |
 | hospital | `agent:bb01ggxymm05` | 1.0.7 | 10:47 | `dep-bbe98f223dff429490fb412e3eaa7e39` | 1.0.6 |
 | specialist | `agent:sh35cbsy287d` | 1.0.7 | 10:09 | `dep-e266d81085594c5eadcb63e840d30232` | 1.0.6 |
 | family_counseling | `agent:nkh372rd16yq` | 1.0.13 | 11:07 | `dep-97eacecfb66a4d71b0284215d69fc756` | 1.0.12 (con il difetto del cancel `past`; 1.0.11 e 1.0.10 hanno anche quelli della riga 10:24) |
@@ -58,4 +58,5 @@ Controllato con `city --json status` alle 10:48 UTC.
 
 | 21/11 ~11:35 | booking_centre | 1.0.26 | deploy fallito (Ismail/Opus) | — | `8414968` | conformance FAIL `health: p99` (carico della città: stesso codice passato al secondo tentativo). |
 | 21/11 11:16 | booking_centre | 1.0.26 | deploy (Ismail/Opus) | `dep-e2aca534c0d24b7bbfd8e5ca439ed497` | `8414968` | B preferisce gli slot ad almeno 20 ore d'agenda, sempre dentro la scadenza vera (il cittadino conferma dopo 19 ore di mediana; 12 slot confermati erano già passati) (#119). Conformance PASS. |
+| 21/11 11:18 | booking_centre | 1.0.26 (secondo build) | deploy (Andrei) | `dep-77ea4b5b7cd34d45b8281d7656f315fd` | `a2c00a8` | **Due build con lo stesso numero.** Il deploy di Ismail delle 11:16 (`8414968`, solo #119) e questo, partito da `main` dopo il merge della #118 con la card ancora a 1.0.26 in locale, si sono sovrapposti: i miei due tentativi delle 11:14 e 11:15 sono finiti in `QUOTA_EXCEEDED` per il suo deploy. Online da qui: #119 + #118 (Abed, completa la #86: partner incompatibili nell'Index esclusi anche dal ring e dalla memoria; recupero dopo rifiuto per `deadline` dentro il termine della pratica, caso 3130005). 29 suite verdi su `a2c00a8`. Conformance PASS (32,3 s). Per l'attribuzione: 11:16-11:18 = solo #119; dalle 11:18 = #119 + #118. Il prossimo rilascio del CUP è 1.0.27. |
 Commit: per le righe fino alle 07:29 è il commit del bump della card (il codice rilasciato è quello del suo genitore su `main`); dalle prossime, lo SHA di `main` rilasciato. Le righe con «—» sono ricostruite dai commit: chi ha fatto quei deploy può completare il deployment.
