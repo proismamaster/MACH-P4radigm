@@ -522,6 +522,26 @@ async def sostitutive_dopo_l_attesa() -> None:
     check("... in un solo messaggio, una volta sola", batches(h, CIT_B) == 2, h)
 
 
+async def cancel_past_e_pagina_due() -> None:
+    print("Cancel `past` al confirm, pagina 2 dopo l'attesa: le offerte sostitutive arrivano col push (000382, 911000394)")
+    h = Arena(Ledger(), reads=2)
+    a = await open_case(h, N_A, CIT_A)  # il caso ha le sue letture: agenda 14/12 18:00 e pagina 1
+    # Tra l'offerta e la conferma passano ore d'agenda: ora sono le 09:45 del 15/12, lo slot offerto e' alle 10:30.
+    h.port.log.append(tf.Message(
+        type="chat", sender=tf.LEDGER, recipient=ME, msg_id=tf.uuid4().hex, need_id=N_A, conversation_id="c-ledger",
+        body={"text": "agenda wave_id=W01QQQ rate=60.0 paused=false agenda_now=2026-12-15T09:45:00.000Z agenda_day=tue"},
+        sent_at=datetime.now(timezone.utc).isoformat()))
+    h.reads, h.mod._WAIT_SECONDS = 10 ** 6, 0.05  # la pagina 2 arriva dopo l'attesa: la porta il push
+    await confirm(h, N_A, CIT_A, a[0])
+    cs = cancels(h, CIT_A)
+    check("confirm di uno slot a 45 minuti: un cancel reason=past con lo slot e nessun hold",
+          len(cs) == 1 and "reason=past" in cs[0] and f"slot_id={a[0]}" in cs[0] and h.world.hold_calls == [], h)
+    again = offered(h, CIT_A)[len(a):]
+    check("la pagina 1 non ha altro a 10 ore: arriva la pagina 2 e le offerte sostitutive partono col push",
+          bool(again) and all("-20261216-" in s for s in again) and a[0] not in again, h)
+    check("... in un solo messaggio, una volta sola", batches(h, CIT_A) == 2, h)
+
+
 def altro_pod(h: tf.Harness):
     """Un secondo pod dello stesso agente (un rilascio): memoria vuota, stessa casella."""
     mod = tf.load(CAP, ME)
@@ -585,6 +605,7 @@ async def run() -> None:
     await ricerche_dei_cup()
     await rifiuti_del_relay()
     await sostitutive_dopo_l_attesa()
+    await cancel_past_e_pagina_due()
     await riprova_gia_in_corso()
     segni()
     print(f"\n{'TUTTO OK' if not tf.FAILS else str(len(tf.FAILS)) + ' FALLITE'}")

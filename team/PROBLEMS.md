@@ -1,6 +1,22 @@
 
 # Problemi
 
+## Verifica della 1.0.12 in sola lettura (21/11, messaggi fino alle 10:56 UTC)
+
+- **Tre `held` su tre dopo le 10:24 UTC finiscono in `STALE_FENCE` con il commit partito entro 2 s** (orari `sent_at`, UTC; il Ledger risponde `refused commit code=STALE_FENCE detail=the fence expired`):
+
+| need_id | hold | `held` | commit | `STALE_FENCE` |
+|---|---|---|---|---|
+| `N-2026-11-02-890911000386` | 10:30:44 | 10:35:44 (300 s) | 10:35:46 | 10:40:41 (+295 s) |
+| `N-2026-11-02-890911000396` | 10:41:25 | 10:46:07 (282 s) | 10:46:09 | 10:52:08 (+359 s) |
+| `N-2026-11-02-8909110003810002` | 10:44:00 | 10:49:58 (358 s) | 10:50:03 | 10:55:40 (+337 s) |
+
+  Riferimento 1.0.11, stesso schema: `…890911000386`, `held` 10:22:30, commit 10:22:31, `STALE_FENCE` 10:25:35 (+185 s). Il Ledger a 08:48 UTC rispondeva in 69 s (hold) e 82 s (commit) e prenotava; da 10:22 sta tra 184 e 359 s. La traccia con i `hold_id` è stata passata ad Andrei per i mentori (lease di un hold, rinnovo, latenza attesa).
+- **Offerte sostitutive mai mandate dopo un `cancel reason=past`** (il ramo R7 di `_confirm_once`): `…911000382` (cancel 10:26:02, pagina 2 arrivata alle 10:31:14, nessuna offerta per 25 minuti) e `…911000394` (cancel 10:40:47, pagina 2 alle 10:45:04, nessuna offerta alle 10:56). Il ramo chiamava `_advance(replacing=True)` senza segnare il caso `replace:pending` (lo faceva solo `_recover`): il turno della pagina 2 trovava le offerte già mandate e non diceva niente. In `…911000386` le offerte sono partite (10:46:30) solo perché un `STALE_FENCE` successivo ha attivato `_recover`. **Correzione**: `_replace_offers`, unico punto da cui partono le offerte sostitutive (segna il caso e chiama `_advance`), usato dal ramo `past` e da `_recover`.
+- **Nessun hold doppio dopo le 10:24** (le riprove di `…386`, `…396`, `…3810002` sono la riprova unica dopo `STALE_FENCE`, partita 2 s dopo il rifiuto; il doppio confirm di `…394` alle 10:36:03 ha dato un solo cancel). Doppio solo prima del rilascio: `…003290005` (10:14:19 e 10:15:24, entrambi `EXPIRED`).
+- **Slot passati:** nessun `refused hold EXPIRED` dopo le 10:24; tre `cancel reason=past` al confirm (nessun hold su slot passati): `…382` slot a −10,9 h, `…386` a 0,2 h, `…394` a 0,9 h d'agenda, con confirm elaborati 197-301 s dopo l'arrivo e offerte di 10-24 ore di anticipo ormai consumate. Le riprove di `…396` (10:52:17, slot a 10,9 h) e `…3810002` (10:55:42, slot a 6,0 h) partono con il Ledger a ~6 minuti per richiesta: la seconda avrà lo slot passato quando l'hold viene creato. È il caso della riprova da non fare sotto le ~8 ore d'agenda (non fatto).
+- In vivo funzionano: la prima offerta alla risposta del Ledger (`…003290006`: risposta 10:48:20, offerta 10:48:22; `…003760002`: 10:45:34 → 10:45:39), il commit entro 1-2 s da `held`, la riprova 2 s dopo il rifiuto.
+
 ## Consultorio 1.0.12 online (10:24 UTC) e prova diretta del limite della piattaforma (21/11 10:25)
 
 - **L'attesa nella cronologia funziona:** caso 911000386, `held` alle 10:22:30 (il Ledger aveva impiegato 207 s per l'hold), **commit partito alle 10:22:31, un secondo dopo**. Prima partiva 60-190 s dopo.

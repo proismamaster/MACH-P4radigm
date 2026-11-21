@@ -1055,7 +1055,7 @@ async def _confirm_once(
             ids = (f"offer_id={offer_id} " if offer_id else "") + f"slot_id={slot}"
             await _say(city, message.sender, f"cancel {ids} reason=past Questo orario è già passato.")
         if hold_self and message.sender.startswith("citizen:"):
-            await _advance(city, message, chat, fixed="CONS-GIN", replacing=True)
+            await _replace_offers(city, message, chat)
         return
     # The Ledger already refused this slot to this case, or another case of this process holds or booked
     # it, or it has passed: a hold would only be refused again after a minute or two (NO_CAPACITY 2560005,
@@ -1522,8 +1522,19 @@ async def _recover(
     # The consultorio offers its next free slots again, but only to its own citizen: a confirm
     # that came from another booking centre goes back to that centre with the cancel above.
     if hold_self and target.startswith("citizen:"):
-        _sent(message.need_id or message.msg_id).offers.add(_PENDING)  # until the offers are really sent
-        await _advance(city, message, chat, fixed="CONS-GIN", replacing=True)
+        await _replace_offers(city, message, chat)
+
+
+async def _replace_offers(city: City, message: Message, chat: list[Message]) -> None:
+    """A cancel dropped the citizen's offers: send the next free slots. Every cancel goes through here.
+
+    Until the offers are really sent the case stays marked ``replace:pending``: the Ledger may answer
+    (agenda, the next page of slots) after the wait of this turn, and the turn of that answer then
+    completes them. The cancel for a slot that had passed did not mark the case: 000382 and 911000394
+    got the page 2 at 10:31 and 10:45 UTC and never an offer."""
+
+    _sent(message.need_id or message.msg_id).offers.add(_PENDING)
+    await _advance(city, message, chat, fixed="CONS-GIN", replacing=True)
 
 
 async def _on_checkin(city: City, message: Message, chat: list[Message]) -> None:
