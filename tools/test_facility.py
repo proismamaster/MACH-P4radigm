@@ -989,6 +989,40 @@ async def prova_p() -> None:
           len(h.out(LEDGER, "hold")) == 2, h)
 
 
+async def prova_q() -> None:
+    """Ospedale 1.0.8. (1) Le ricerche dei CUP partner arrivano in need sempre nuovi, senza world ne' agenda:
+    l'ospedale rifaceva un giro del Ledger (40-220 s) mentre l'altro CUP aspetta 15-20 s, quindi le offerte
+    arrivavano a ricerca chiusa (e fuori dalla finestra di risposta rapida). Ora usa agenda e pagina lette in
+    un altro caso da poco. (2) Attesa del Ledger 420 s (rispondeva in 208-217 s alle 10:06 UTC). (3) Check-in:
+    `checked_in` nella cronologia prima del push, il cittadino ha la conferma nello stesso turno."""
+
+    print("Prova Q - ricerche dei partner senza giro del Ledger, attesa 420 s, check-in paziente")
+    real = load("hospital.physiatry", HOSP)
+    real_wait = getattr(real, "_WAIT_SECONDS", 0)
+    import importlib.util as iu
+    spec = iu.spec_from_file_location("hosp_real", AGENT_FILE)
+    mod = iu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    check("valore vero: attesa del Ledger di almeno 420 s", mod._WAIT_SECONDS >= 420 and real_wait == 0.0)
+
+    h = Harness("hospital.physiatry", HOSP, World(HOSP, {"VIS-FIS:1": slots_reply(HOSP, ROWS)}), need="N-2026-11-21-00Q1")
+    await h.turn(CUP_EXT, SEARCH.replace("rq-T1", "rq-Q1"))
+    h.need, h.world = "N-2026-11-21-00Q2", Silent(HOSP)
+    before = len(h.out(LEDGER))
+    other = "agent:t09/booking_centre"
+    await h.turn(other, SEARCH.replace("rq-T1", "rq-Q2"))
+    second = " ".join(h.out(other, "offer"))
+    check("seconda ricerca in un altro caso: offerte subito da agenda e pagina gia' lette, nessun messaggio al Ledger",
+          "slot_id=S-1" in second and "request_id=rq-Q2" in second and len(h.out(LEDGER)) == before, h)
+
+    h = Harness("hospital.physiatry", HOSP, Silent(HOSP))
+    h.port = LatePort(HOSP, World(HOSP))
+    _patient(h)
+    await h.turn(CIT, "checkin booking_id=BK-77 ledger_ref=LR-77")
+    check("check-in con checked_in solo nella cronologia: checkin al Ledger e conferma al cittadino nello stesso turno",
+          len(h.out(LEDGER, "checkin")) == 1 and len(h.out(CIT, "checkin")) == 1, h)
+
+
 async def run() -> None:
     # Ogni agente ha le sue prove: A, B, D, F, G, I-N e P provano l'ospedale, C e O il consultorio; E e H valgono per tutti.
     if "family_counseling" in os.path.normpath(AGENT_FILE).split(os.sep):
@@ -1007,6 +1041,7 @@ async def run() -> None:
         await prova_m()
         await prova_n()
         await prova_p()
+        await prova_q()
     await prova_e()
     await prova_h()
     print(f"\n{'TUTTO OK' if not FAILS else str(len(FAILS)) + ' FALLITE'}")

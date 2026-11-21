@@ -659,7 +659,7 @@ def _release(key: str) -> None:
 # of 12, `held` -> commit median 107 s; hold NO_CAPACITY 28 of 42. A hold lasts about two minutes and the
 # Ledger's reply is in the case history as soon as the Relay accepts it, while the push that opens our turn
 # comes 60-90 s later. The confirm turn reads the history until the reply is there (as the consultorio).
-_WAIT_SECONDS = 180.0
+_WAIT_SECONDS = 420.0  # the Ledger answered in 208-217 s at 10:06 UTC (consultorio and specialist wait 420 s)
 _WAIT_STEP = 1.0
 
 # Slots of this hospital that this process knows are not free: held by a case (or full) for a while, booked
@@ -688,6 +688,43 @@ def _gone(besides: str = "") -> set[str]:
     for slot in [slot for slot, mark in _GONE.items() if mark[0] <= now]:
         del _GONE[slot]
     return {slot for slot, (_, why, owner) in _GONE.items() if not besides or owner != besides or why == "past"}
+
+
+# The Ledger's latest agenda and page-1 slot lines, whatever case they came in: the world is the ASST's, the
+# same for every case. A search from a booking centre arrives in a new case with neither, and reading them
+# again costs a Ledger round trip (40-220 s) while the asker waits 15-20 s for partner replies.
+_READS_FRESH = 120.0  # real seconds a remembered page stays usable for a search
+_LEDGER_READS: dict[str, tuple[Message, float]] = {}  # "agenda" or procedure -> (Ledger row, when seen)
+
+
+def _remember_reads(chat: list[Message]) -> None:
+    for row in chat:
+        if row.sender != LEDGER:
+            continue
+        head = first_word(row.text)
+        if head == "agenda" and "agenda_now=" in row.text:
+            key = "agenda"
+        elif head == "slots" and _page(row.text)[0] == 1:
+            procs = {fields_of(line).get("procedure") for line in row.text.splitlines() if "slot_id=" in line} - {None}
+            if len(procs) != 1:
+                continue
+            key = procs.pop()
+        else:
+            continue
+        seen = _LEDGER_READS.get(key)
+        if seen is None or seen[0].msg_id != row.msg_id:
+            _LEDGER_READS[key] = (row, monotonic())
+
+
+def _with_reads(chat: list[Message], procedure: str) -> list[Message]:
+    """``chat`` with the remembered agenda and slot page in front, when the case lacks them and they are
+    recent. The case's own rows come later and win; _agenda_now extrapolates from the row's sent_at."""
+    extra = []
+    for key, missing in (("agenda", not _has_agenda(chat)), (procedure, _latest_slots_for(chat, procedure) is None)):
+        seen = _LEDGER_READS.get(key)
+        if missing and seen is not None and monotonic() - seen[1] <= _READS_FRESH:
+            extra.append(seen[0])
+    return [*extra, *chat] if extra else chat
 
 
 def _hold_open(chat: list[Message], agent: str, slot: str) -> bool:
@@ -1061,6 +1098,7 @@ async def _facility(
 ) -> None:
     head = first_word(message.text)
     kind = words(message.text)
+    _remember_reads(chat)
     if _is_fault(message, city.agent_id):
         await _on_fault(city, message, chat)
     elif message.sender == LEDGER and head in {"slots", "agenda"} and _open_faults(chat, city.agent_id):
@@ -1365,7 +1403,9 @@ async def _on_checkin(city: City, message: Message, chat: list[Message], *, repo
     if not _we(chat, city.agent_id, token, to=LEDGER, word="checkin"):
         if not await _say(city, LEDGER, f"checkin booking_id={booking_id} citizen={citizen}"):
             return
-    found = await _await_line(city, message.need_id, chat, "checked_in", token, op="checkin")
+    # Patient: the check-in window is half an agenda day (5 real minutes) and the push of checked_in comes
+    # 60-90 s after the Ledger's reply is already in the case history.
+    found = await _await_line(city, message.need_id, chat, "checked_in", token, op="checkin", patient=True)
     if found is None:
         _LOG.info("care.checkin.missing", extra={"need_id": (message.need_id or "")[:48]})
         return
@@ -1752,6 +1792,7 @@ async def _answer_search(
         return
     priority = (fields.get("priority") or "").upper() or None
 
+    chat = _with_reads(chat, procedure)
     world = _latest_slots_for(chat, procedure)
     now = _agenda_now(chat)
     if world is None or now is None:

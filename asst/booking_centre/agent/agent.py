@@ -1014,7 +1014,9 @@ def _cup_case(chat: list[Message], agent: str, citizen: str) -> _CupCase:
             elif act == "booking.receipt" and fields.get("booking_id") and fields.get("ledger_ref"):
                 state.receipt = row
         elif act == "confirm" and fields.get("citizen") == citizen and row.recipient.startswith("agent:"):
-            state.confirmation = row
+            previous = state.confirmation
+            if previous is None or (row.recipient, row.text) != (previous.recipient, previous.text):
+                state.confirmation = row  # A resend keeps the same pending attempt and its original send time.
     return state
 
 
@@ -1080,7 +1082,9 @@ def _cup_history(chat: list[Message], cache: _Sent, agent: str, need_id: str) ->
     return merged
 
 
-def _cup_cancelled_booking(message: Message, receipt: Message, confirmation: Message) -> tuple[str, str] | None:
+def _cup_booking_cancel_notice(message: Message, booked: dict[str, str], confirmation: Message) -> str | None:
+    if (message.recipient, message.need_id) != (confirmation.sender, confirmation.need_id):
+        return None
     # A facility may attach new offers below the cancellation, with different slot and offer IDs.
     if message.type == "chat":
         act, fields = _cup_input(message, first_line=True)
@@ -1094,19 +1098,53 @@ def _cup_cancelled_booking(message: Message, receipt: Message, confirmation: Mes
         return None
     if not fields.get("booking_id") and not (city_fault and fields.get("slot_id")):
         return None  # A facility's pre-commit refusals carry an offer or a slot, but no booking ID.
-    booked = fields_of(receipt.text)
     confirmed = fields_of(confirmation.text)
     if not (slot := confirmed.get("slot_id")):
         return None
     expected = {
         "booking_id": booked["booking_id"], "ledger_ref": booked["ledger_ref"],
-        "slot_id": slot, "facility": confirmation.recipient, "citizen": receipt.recipient,
+        "slot_id": slot, "facility": confirmation.recipient, "citizen": confirmed.get("citizen"),
         "offer_id": confirmed.get("offer_id"), "cup_offer_id": confirmed.get("cup_offer_id"),
         "request_id": confirmed.get("request_id"), "prescription_number": confirmed.get("prescription_number"),
     }
     if any(key in fields and fields[key] != value for key, value in expected.items()):
         return None
-    return booked["booking_id"], slot
+    return (
+        f"cancel booking_id={booked['booking_id']} slot_id={slot} reason=facility_cancelled "
+        "La struttura ha annullato la visita. Cerco subito un altro orario per lei."
+    )
+
+
+def _cup_pending_receipt(
+    chat: list[Message], confirmation: Message, inbound: Message,
+) -> tuple[int, dict[str, str]] | None:
+    """Find a receipt from the chosen facility, after this booking attempt began."""
+
+    start = next((index for index, row in enumerate(chat) if row.msg_id == confirmation.msg_id), len(chat))
+    confirmed = fields_of(confirmation.text)
+    sent_at = _when(confirmation.sent_at)
+    for index, row in enumerate(chat[start + 1:], start + 1):
+        if (row.sender, row.recipient, row.need_id) != (confirmation.recipient, confirmation.sender, confirmation.need_id):
+            continue
+        received_at = _when(row.sent_at)
+        if sent_at and received_at and received_at < sent_at:
+            continue
+        act, fields = _cup_input(row)
+        if act != "booking.receipt":
+            continue
+        if any(
+            key in fields and fields[key] != confirmed.get(key)
+            for key in ("offer_id", "cup_offer_id", "slot_id", "request_id", "citizen", "facility", "prescription_number")
+        ):
+            continue
+        if not (fields.get("offer_id") or fields.get("slot_id")):
+            # Preserve the local direct reply format. A receipt found in past history needs an ID
+            # to distinguish this attempt from an earlier booking at the same facility.
+            if row.msg_id != inbound.msg_id or "request_id" in confirmed:
+                continue
+        if fields.get("booking_id") and fields.get("ledger_ref"):
+            return index, fields
+    return None
 
 
 async def _booking_centre(city: City, message: Message, chat: list[Message]) -> None:
@@ -1124,16 +1162,32 @@ async def _booking_centre(city: City, message: Message, chat: list[Message]) -> 
 
     state = _cup_case(chat, city.agent_id, citizen)
     if state.receipt is not None:
-        if state.confirmation and (cancelled := _cup_cancelled_booking(message, state.receipt, state.confirmation)):
-            booking_id, slot = cancelled
-            await _cup_cancel(
-                city, message, chat, cache, citizen,
-                f"cancel booking_id={booking_id} slot_id={slot} reason=facility_cancelled "
-                "La struttura ha annullato la visita. Cerco subito un altro orario per lei.",
-            )
+        if state.confirmation and (notice := _cup_booking_cancel_notice(
+            message, fields_of(state.receipt.text), state.confirmation,
+        )):
+            await _cup_cancel(city, message, chat, cache, citizen, notice)
         return
     act, fields = _cup_input(message)
     pending = state.confirmation
+    if pending is not None and (
+        message.sender in {citizen, pending.recipient} or message.sender.startswith("city:")
+    ):
+        if matched := _cup_pending_receipt(chat, pending, message):
+            index, booked = matched
+            receipt_at = _when(chat[index].sent_at)
+            for row in chat[index + 1:]:
+                if receipt_at and (cancel_at := _when(row.sent_at)) and cancel_at < receipt_at:
+                    continue
+                if notice := _cup_booking_cancel_notice(row, booked, pending):
+                    await _cup_cancel(city, message, chat, cache, citizen, notice)
+                    return
+            receipt = (
+                f"booking.receipt booking_id={booked['booking_id']} ledger_ref={booked['ledger_ref']} "
+                "Prenotazione confermata. Conservi booking_id e ledger_ref: le serviranno per il "
+                "check-in in struttura il giorno della visita."
+            )
+            await _cup_send(city, message, cache, citizen, receipt)
+            return
     number = _cup_number(chat, citizen, state.expired_prescriptions)
     if pending is not None:
         number = fields_of(pending.text).get("prescription_number")
@@ -1173,18 +1227,7 @@ async def _booking_centre(city: City, message: Message, chat: list[Message]) -> 
         choice = fields_of(pending.text)
         if any(fields[key] != choice.get(key) for key in ("offer_id", "slot_id", "citizen", "request_id") if key in fields):
             return
-        if act == "booking.receipt":
-            if "request_id" in choice and not ("offer_id" in fields or "slot_id" in fields):
-                return
-            booking_id, ledger_ref = fields.get("booking_id"), fields.get("ledger_ref")
-            if booking_id and ledger_ref:
-                receipt = (
-                    f"booking.receipt booking_id={booking_id} ledger_ref={ledger_ref} "
-                    "Prenotazione confermata. Conservi booking_id e ledger_ref: le serviranno per il "
-                    "check-in in struttura il giorno della visita."
-                )
-                await _cup_send(city, message, cache, citizen, receipt)
-        elif act in {"cancel", "hold_refused"} and fields.get("offer_id") == choice.get("offer_id"):
+        if act in {"cancel", "hold_refused"} and fields.get("offer_id") == choice.get("offer_id"):
             # MACH-1.2: a partner reports Ledger refusals as cancel reason=<code in lower case>
             # or hold_refused ledger_code=<CODE>; both free the case and start a new search.
             citizen_offer = choice.get("cup_offer_id", choice["offer_id"])

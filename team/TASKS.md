@@ -28,6 +28,7 @@ Base comune: `team/PROJECT.md` → "Stato attuale" e `team/RILASCI.md` → "Onli
 
 | Chi | Analisi | Dati | Esito atteso |
 |---|---|---|---|
+| Abed | CUP: ricevuta in cronologia prima del reinvio o della ricerca sostitutiva | Prova locale con City SDK, struttura e riferimenti dell'offerta | Correzione con test sul branch `abed/cup-recupero-ricevuta`, da rivedere |
 | Hapca | Consultorio: `_MIN_LEAD` 10 ore porta a cancel `past` (5 su 6 conferme nell'export 10:53-11:53 UTC) e `STALE_FENCE`. Misura offerta→conferma e hold→commit dopo la 1.0.14; porta il minimo a ~18 ore aggiornando le fixture. | export falliti, `tools/misura_latenze.js` | PR con test, numeri prima/dopo |
 | Andrei | Ospedale: le 15 "conferme senza ricevuta" dell'export 10:53-11:53 UTC: per ognuna, dove si ferma `confirm → hold → held → commit → ricevuta` e con che codice. Più: alla prossima ondata (ogni ~20 min, 11:31 e 11:51) conta i cittadini senza risposta di CUP e GP con concorrenza 32. | export, log `care.hold`, console | tabella in `PROBLEMS.md`, proposta |
 | Abed | CUP: dopo la 1.0.27 (senza #119, 12:07 UTC) rapporto rifiuti `deadline` per offerta (prima 0,45, con #119 0,90). Verifica `_true_deadline` (`_TO_CUP` 21 ore) sui percorsi con il primo messaggio e la riga di rifiuto. Partner: con P2 in vigore, cosa rispondono (log `cup.partner_reply`), se leggono `earliest`/`deadline` MACH-1.4. | console, log del CUP | numeri, eventuale PR con test |
