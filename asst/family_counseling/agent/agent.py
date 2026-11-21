@@ -61,16 +61,17 @@ def role_of() -> str:
     return _card_role(text)
 
 
-# Trust ring (level 8, impostors from 10:00): an agent talks to us only if it is in the ring list
-# or city.find returns it as a booking centre. Anyone else gets no reply and no Ledger call: an
-# answer to a stranger is one effect too many. The list holds the facilities published on Discord;
-# the booking centres of the other ASST come from city.find.
+# Trust ring, safe mode (level 8, impostors from Saturday 10:00). The Index may not return the
+# booking centres to a facility, so a stranger is NOT refused for being unknown: a sender is
+# blocked (no reply, no Ledger call) only when it is in neither the ring list nor city.find AND
+# it sends a facility= naming another agent or a text with instructions. Before 10:00 nothing is
+# blocked and the log says who would have been. The list holds the ids published so far.
 _RING = frozenset((
     "agent:h6r1v45esk77", "agent:hnpe58epeyh1", "agent:gpr1zqe343gb", "agent:zand0f57ec1j",
     "agent:nanpr5mgm2py", "agent:pky3vqyqbepa", "agent:xtj1dk9x3qej", "agent:q18es2d82f8r",
     "agent:x0vr9rbwpesr", "agent:h8425ac7btd8", "agent:tmt0bcv0st1f", "agent:n9bf9y6670hp",
     "agent:s1twcdzg3296", "agent:f2s88vwd3jnf", "agent:gxq3vzgt3h5t", "agent:tty8erdj6t41",
-    "agent:etpwrfmfa8hm",
+    "agent:etpwrfmfa8hm", "agent:tnzkhsa62kn0",
 ))
 _KNOWN: dict[str, float] = {}  # booking centre -> when city.find last confirmed it
 _KNOWN_FOR = 300.0
@@ -94,16 +95,35 @@ async def _in_ring(city: City, sender: str) -> bool:
     return _KNOWN.get(sender, 0.0) > monotonic()
 
 
+# Real clock, Milan time (CET, UTC+1): the impostors arrive on Saturday 21/11 at 10:00.
+_ENFORCE_FROM = datetime(2026, 11, 21, 10, 0, tzinfo=timezone(timedelta(hours=1)))
+_INJECTION = re.compile(
+    r"ignor\w*\s+(\w+\s+){0,3}(regole|istruzioni|rules|instructions|prompt)"
+    r"|(disregard|forget|dimentica\w*)\s+(\w+\s+){0,3}(rules|instructions|regole|istruzioni)"
+    r"|\b(sei ora|you are now|act as|fingi di)\b|system prompt"
+    r"|(mandami|inviami|dammi|mostrami|send me|give me|reveal)\s+(\w+\s+){0,3}(dati|data|nome|name)"
+    r"|senza (il )?consenso|without (the )?consent|salta\w* i controlli|bypass",
+    re.IGNORECASE,
+)
+
+
 async def _admitted(city: City, message: Message) -> bool:
     sender = message.sender
     if sender == LEDGER or sender == city.agent_id or sender.startswith(("citizen:", "city:")):
         return True
-    # facility= names the sender (its own offer) or us (the booking centre's confirm); a third
-    # facility is a forged claim.
+    # facility= names the sender (its own offer) or us (the booking centre's confirm); another
+    # agent is a forged claim.
     facility = _search_fields(message).get("facility", "")
-    if facility and facility not in (sender, city.agent_id):
-        return False
-    return await _in_ring(city, sender)
+    forged = bool(facility) and facility not in (sender, city.agent_id)
+    injected = bool(_INJECTION.search(message.text))
+    if not (forged or injected) or await _in_ring(city, sender):
+        return True
+    enforced = datetime.now(timezone.utc) >= _ENFORCE_FROM
+    _LOG.warning(
+        "care.ring.suspect",
+        extra={"sender": sender, "facility": facility, "injection": injected, "blocked": enforced},
+    )
+    return not enforced
 
 
 async def main(need: Need, city: City) -> None:
