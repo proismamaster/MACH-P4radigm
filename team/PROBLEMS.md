@@ -1,7 +1,7 @@
 
 # Problemi
 
-## Livello 5 (console, 21/11 00:30-00:50 UTC = 01:30-01:50 locali)
+## Livello 5/6 (console, 21/11 dalle 00:30 UTC = 01:30 locali)
 
 Wave W01QQQ, `level 5`, `agenda_now` 19/11 (giovedì). Console: 200 percorsi, 80 `failed`, 26 `open`, 52 `done`. 52 percorsi `failed`/`open` aggiornati negli ultimi 20 minuti, letti uno alla volta (`/v1/team/journeys/<need_id>`): 47 letti, 5 in timeout. Orari UTC. `S` = `answer_set` effective/size del verdetto. Nomi dei percorsi = ultime 6 cifre dell'id.
 
@@ -40,6 +40,24 @@ Wave W01QQQ, `level 5`, `agenda_now` 19/11 (giovedì). Console: 200 percorsi, 80
 | 175 | 2 | cardiologia it | 119/208 | partner: offerta, consenso, `facility_cancelled`, rifiuto del cittadino |
 | 630002 | 3 | cardiologia B it | 123/208 | partner Nord s1 20/11, consenso rifiutato, `cancel consent_declined`, silenzio |
 | 050002 | 3 | consultorio | 0/0 | caso 5 |
+
+### Partner con 25 ricerche (CUP 1.0.14; 21/11 00:54-01:00 UTC = 01:54-02:00 locali)
+
+Causa 2 chiarita da Opus: `city.find` dà `role=hospital` e il CUP filtrava `role=facility`; dalla 1.0.14 `asked=25`. Cattura dal vivo di `GET /v1/logs?agent_id=agent%3Aez8cb7j167p2&q=cup.partner` (il log tiene pochi secondi; un campione ogni ~20 s perché il pannello della console è nascosto):
+
+| Need (ultime cifre) | Priorità | `now` agenda | asked | answered | usable_offers |
+|---|---|---|---|---|---|
+| 209 | B | 19/11 18:58 | 25 | 17 | 0 |
+| 211 | B | 19/11 23:17 | 25 | 17 | 0 |
+| 1910002 | B | 20/11 05:05 | 25 | 0 (in corso) | 0 |
+
+- Risposte dei 25 per il 211: `no_availability` 12, `facility_unavailable` 3, `policy_unavailable` 1, `temporarily_unavailable` 1, `NO_CAPACITY` 1 (Isola), `no_slot` 1 (Precotto specialista), una **offerta**: Gorla specialista (`agent:h6krzxx6es83`) VIS-CARD, lun 23/11 10:30 e 12:00. Per una B con `now` 19/11 23:17 la scadenza è 21/11 23:17, quindi il CUP la scarta (`usable_offers=0`): scarto giusto.
+- Esito: con 25 partner non è ancora arrivata nessuna offerta utilizzabile e nessuna prenotazione da partner. Campione piccolo (3 ricerche in 7 minuti): il CUP cerca fuori solo quando l'ASST non ha posti.
+- Ipotesi: un partner che offre fuori scadenza per una B suggerisce che anche gli altri applicano la finestra: la risposta `no_availability` è coerente con il mondo esaurito entro 2 giorni. Il verdetto dei nostri `failed` (`S` fino a 297) non dice dove siano quei posti.
+
+### Livello 6 (dalle 02:15 locali; letto alle 02:00)
+
+Non ancora iniziato al momento della lettura. Scansione dei percorsi `booked`/`done` recenti: 2 letti su 23 (000195 `done` L3, 000183 `booked` L5, entrambi con ricevuta e nessun `cancel` dopo); gli altri 21 in timeout. Nessun `fault.cancel` né `facility_cancelled` dopo una ricevuta finora. Il prossimo giro (alle :07, :27, :47) cerca `facility_cancelled` e `fault.cancel` dopo `booking.receipt` e se il CUP riprenota entro la scadenza.
 
 ## Percorsi falliti e aperti (console, 20/11 23:50)
 
