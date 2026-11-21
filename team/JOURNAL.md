@@ -1,5 +1,22 @@
 # Journal (la voce più recente in alto)
 
+## 2026-11-21 01:45 — Ismail (Opus) — Livello 4: partner dell'anello, alternativa rilassata, rifiuti del cittadino
+
+**Fatto**
+- CUP 1.0.3-1.0.7 (PR #19, #21, #22, #26, #27, #30): legge le offerte dei partner nel formato comune (senza `expiry`/`agenda_day`, `doctor_lang` per l'h3 con lingua rara, date MACH-1.1 senza fuso lette come UTC), manda `cross_asst_consent_ref`, scrive prima alle 6 strutture dell'anello pubblicate su Discord (la lingua del cittadino in testa) e poi a `city.find`, aspetta i partner 20 s.
+- Insieme vuoto: alternativa rilassata solo sui giorni, mai sulla lingua (172: il cittadino inglese rifiuta l'h3).
+- Rifiuto del cittadino (`cancel offer_id=... reason=deadline|language`): chiude l'offerta e il CUP riparte. Prima restava in silenzio e il percorso falliva (165, 166).
+- Consultorio 1.0.1 (PR #20): `doctor_lang`/`doctor_gender` nelle offerte ai CUP esterni, filtro `lang=`/`gender_preference=`, accetta `cross_asst_consent_ref`.
+- Ospedale: file ridotto al suo ruolo (PR #25, 1588 -> 1400 righe). Deploy 1.0.1 fallito 3 volte in conformance (`custody.ack`, `invoke.signature`), online resta 1.0.0.
+
+**Problemi**
+- La console mostra solo i messaggi col cittadino: non si vede se i partner rispondono. Verificare dai percorsi successivi se arrivano offerte con `Rete ASST.`.
+- `test_facility.py` sui file ridotti: le prove dell'altro ruolo falliscono (atteso). Hospital: fallisce la prova C; consultorio: A e B.
+
+**Prossimo passo**
+- Verificare in console un percorso con offerta di un partner e uno con alternativa rilassata.
+- GP 1.0.3 e ospedale 1.0.1 ancora da pubblicare.
+
 ## 2026-11-20 22:53 — Abed — Rinnovo P1 e disponibilità cross-ASST del CUP
 
 **Fatto**
