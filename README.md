@@ -1,6 +1,6 @@
 # MACH-P4radigm
 
-Cinque agenti AI per il **Milano Agentic City Hackathon (MACH 2026)**, squadra p4radigm, ASST Bicocca.
+Cinque agenti AI per il **Milano Agentic City Hackathon (MACH 2026)**, organizzato con Fastweb, Vodafone e Project NANDA. Squadra p4radigm, ASST Bicocca.
 Il codice è stato scritto e rilasciato in 30 ore (20-21 novembre 2026). In classifica abbiamo chiuso intorno al 9° posto.
 
 ## Cosa fa
