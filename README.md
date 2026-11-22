@@ -62,6 +62,13 @@ for f in tools/test_*.py; do python "$f" || echo "FAIL $f"; done
 
 Archivio di gara: non più in esecuzione. `docs-kit/` e `reference/` sono materiale degli organizzatori. Gli id degli agenti in `card.yaml` valevano solo per la città dell'evento.
 
-## Squadra
+## Il mio contributo
 
-p4radigm: Ismail (leader, coordinamento e rilasci), Andrei Ciubara (ospedale, rilasci), Abed (CUP), Hapca (consultorio), Ettore (pitch e monitoraggio).
+Ismail Barakat (GitHub: proismamaster), con Claude Code come assistente di programmazione.
+
+- Analisi dei percorsi falliti dalla console (JSON esportati e classificati con script), per capire dove i cittadini restavano senza risposta.
+- Correzioni di GP, CUP e specialista: regola P2 sul consenso cross-ASST, attese pazienti sul Ledger, gestione dei rifiuti tardivi, ritiro di una modifica che peggiorava i risultati.
+- Test scritti prima delle correzioni (rosso sul vecchio codice, poi verde) e suite completa verificata a ogni rilascio.
+- Deploy, city scale e registro dei rilasci (	eam/RILASCI.md), con un rollback quando una versione non funzionava.
+
+Il resto della squadra ha scritto altre parti: Andrei Ciubara (ospedale), Abed Barakat (CUP), Hapca (consultorio), Ettore (pitch).
